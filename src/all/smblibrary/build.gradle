@@ -1,0 +1,29 @@
+ext {
+    extName = 'SMB Library'
+    extClass = '.SmbLibrary'
+    extVersionCode = 4
+    isNsfw = false
+}
+
+apply plugin: "kei.plugins.extension.legacy"
+
+android {
+    buildTypes {
+        release {
+            proguardFiles 'proguard-rules.pro'
+        }
+    }
+
+    sourceSets {
+        test {
+            java.srcDirs += ['test']
+            kotlin.srcDirs += ['test']
+        }
+    }
+}
+
+dependencies {
+    implementation("com.hierynomus:smbj:0.14.0")
+    testImplementation(libs.kotlin.stdlib)
+    testImplementation(libs.junit)
+}

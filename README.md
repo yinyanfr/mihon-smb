@@ -1,53 +1,107 @@
-# Keiyoushi Extensions
+# Mihon SMB Library
 
-### Please give the repo a :star:
+SMB Library is a Mihon/Tachiyomi-compatible source extension that reads a manga library directly from an SMB2/SMB3 share. It does not require Komga, Kavita, WebDAV, a custom HTTP service, or any server-side component on the NAS.
 
-| Build                                                                                                                                                                               | Need Help?                                                                                                                                              |
-|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| [![CI](https://github.com/keiyoushi/extensions-source/actions/workflows/build_push.yml/badge.svg)](https://github.com/keiyoushi/extensions-source/actions/workflows/build_push.yml) | [![Discord](https://img.shields.io/discord/1193460528052453448.svg?label=discord&labelColor=7289da&color=2c2f33&style=flat)](https://discord.gg/3FbCpdKbdY) |
+The extension lives in [`src/all/smblibrary`](src/all/smblibrary).
 
-## Usage
-**If you are new to repository/extensions, please read the [Keiyoushi Getting Started guide](https://keiyoushi.github.io/docs/guides/getting-started#adding-the-extension-repo) first.**
+## Features
 
-* You can add our repo by visiting the [Keiyoushi Website](https://keiyoushi.github.io/add-repo)
-* Otherwise, copy & paste the following URL: https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json
+- Connects to SMB2/SMB3 shares with host, port, share, root path, username, password, and optional domain settings.
+- Lists every direct child folder under the configured root as a manga.
+- Detects direct image folders, `.zip` files, `.cbz` files, and images stored directly in a manga folder as chapters.
+- Reads folder images as SMB streams without loading a complete chapter into memory.
+- Downloads ZIP/CBZ archives to the extension's private cache for random-access reading.
+- Uses local first-page images as covers, including streaming the first readable ZIP/CBZ image without downloading the complete archive.
+- Supports natural sorting and manga sorting by name or SMB modification time in either direction. The default is newest first.
+- Keeps SMB credentials in Android preferences and never places them in manga, chapter, page, or thumbnail URLs.
 
-## Requests
+Supported images: `.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`.
 
-To request a new source or bug fix, [create an issue](https://github.com/keiyoushi/extensions-source/issues/new/choose).
+Supported archives: `.zip`, `.cbz`.
 
-Please note that creating an issue does not mean that the source will be added or fixed in a timely
-fashion, because the work is volunteer-based. Some sources may also be impossible to do or prohibitively
-difficult to maintain.
+## Library Layout
 
-If you would like to see a request fulfilled and have the necessary skills to do so, consider contributing!
-Issues are up-for-grabs for any developer if there is no assigned user already.
+Each direct folder under the configured root appears as one manga:
 
-## Contributing
+```text
+Manga Root/
+├── Manga With Direct Images/
+│   ├── 1.jpg
+│   ├── 2.jpg
+│   └── 10.jpg
+├── Manga With Folders/
+│   ├── Chapter 1/
+│   │   ├── 001.jpg
+│   │   └── 002.jpg
+│   └── Chapter 10/
+│       ├── 001.jpg
+│       └── 002.jpg
+└── Manga With Archives/
+    ├── Chapter 1.cbz
+    └── Chapter 10.zip
+```
 
-Contributions are welcome!
+Images directly inside a manga folder are grouped into one virtual chapter named `本卷`. Unsupported files are ignored.
 
-Check out the repo's [issue backlog](https://github.com/keiyoushi/extensions-source/issues) for source requests and bug reports.
+## SMB Settings
 
-## License
+For a remote path such as `//nas/shared/dl`:
 
-    Copyright 2015 Javier Tomás
+| Setting | Value |
+| --- | --- |
+| Host | `nas` |
+| Port | `445` |
+| Share | `shared` |
+| Root path | `dl` |
 
-    Licensed under the Apache License, Version 2.0 (the "License");
-    you may not use this file except in compliance with the License.
-    You may obtain a copy of the License at
+The root path is relative to the selected share and may be empty. Do not include `smb://` in the host field. Empty username and password values can be used with NAS shares that explicitly allow anonymous access.
 
-    http://www.apache.org/licenses/LICENSE-2.0
+## Archive Cache
 
-    Unless required by applicable law or agreed to in writing, software
-    distributed under the License is distributed on an "AS IS" BASIS,
-    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-    See the License for the specific language governing permissions and
-    limitations under the License.
+ZIP/CBZ files are cached under the extension's private Android cache directory. Cache keys include the SMB namespace, relative path, file size, and modification time. Downloads use temporary files, verify the remote fingerprint, and are renamed only after completion.
 
-## Disclaimer
+The cache targets a 512 MiB LRU limit. The archive currently being opened is protected from cleanup, and one archive larger than the limit is allowed to remain readable.
 
-This project does not have any affiliation with the content providers available.
+## Build
 
-This project is not affiliated with Mihon/Tachiyomi. Don't ask for help about these extensions at the
-official support means of Mihon/Tachiyomi. All credits to the codebase goes to the original contributors.
+This repository retains the Keiyoushi extension build infrastructure and history. Android Studio's bundled JBR is recommended on macOS:
+
+```bash
+export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
+export PATH="$JAVA_HOME/bin:$PATH"
+./gradlew src:all:smblibrary:testDebugUnitTest
+./gradlew src:all:smblibrary:spotlessCheck
+./gradlew src:all:smblibrary:assembleDebug
+```
+
+Debug APKs are written under:
+
+```text
+src/all/smblibrary/build/outputs/apk/debug/
+```
+
+The helper script below creates tiny, copyright-free SMB test fixtures:
+
+```bash
+src/all/smblibrary/tools/create-smb-test-data.sh
+```
+
+## Security
+
+- SMB credentials come only from the extension's Android preferences.
+- Password input uses Android's password field type.
+- Credentials are not encoded into Mihon URLs or written to project logs.
+- Internal paths are relative, reversible, and checked for traversal.
+- ZIP entries are filtered without extracting archives into arbitrary directories.
+- The extension is read-only and does not modify NAS content.
+- Local signing keys, signing environment files, SDK paths, Gradle caches, APKs, and build outputs are ignored by Git.
+
+## Current Limitations
+
+RAR/CBR, PDF, EPUB, 7z, nested archives, online metadata scraping, arbitrary-depth browsing, NAS discovery, SMB1, and NAS write operations are not supported.
+
+## Upstream And License
+
+This project is based on the [Keiyoushi extensions-source](https://github.com/keiyoushi/extensions-source) build system and preserves its Git history. SMB access is provided by [SMBJ](https://github.com/hierynomus/smbj).
+
+The repository is licensed under the [Apache License 2.0](LICENSE). This project is not affiliated with Mihon, Tachiyomi, Keiyoushi, or any content provider.
