@@ -1,9 +1,7 @@
 package eu.kanade.tachiyomi.extension.all.manhuarm
 
 import android.content.SharedPreferences
-import android.os.Build
 import android.widget.Toast
-import androidx.annotation.RequiresApi
 import androidx.preference.EditTextPreference
 import androidx.preference.ListPreference
 import androidx.preference.Preference
@@ -23,6 +21,7 @@ import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
+import keiyoushi.annotation.Source
 import keiyoushi.lib.i18n.Intl
 import keiyoushi.lib.i18n.Intl.Companion.createDefaultMessageFileName
 import keiyoushi.network.rateLimit
@@ -45,15 +44,19 @@ import java.util.Date
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
-@RequiresApi(Build.VERSION_CODES.O)
-class Manhuarm(
-    private val language: Language,
-) : Madara(
-    "Manhuarm",
-    "https://manhuarmtl.com",
-    language.lang,
-),
+@Source
+abstract class Manhuarm :
+    Madara(),
     ConfigurableSource {
+
+    private val language: Language by lazy {
+        when (lang) {
+            "ar" -> Language(lang, disableFontSettings = true)
+            "fr", "id" -> Language(lang, supportNativeTranslation = true)
+            "pt-BR" -> Language(lang, "pt", supportNativeTranslation = true)
+            else -> Language(lang)
+        }
+    }
 
     override val useNewChapterEndpoint: Boolean = true
 

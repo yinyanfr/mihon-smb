@@ -18,6 +18,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.annotation.Source
 import keiyoushi.utils.GraphQLErrorInterceptor
 import keiyoushi.utils.GraphQLException
 import keiyoushi.utils.getPreferencesLazy
@@ -26,26 +27,26 @@ import keiyoushi.utils.parseAs
 import keiyoushi.utils.parseGraphQLAs
 import keiyoushi.utils.persistedQueryExtension
 import keiyoushi.utils.toJsonString
+import keiyoushi.zip.readZipEntry
+import keiyoushi.zip.zipDirectory
 import okhttp3.CacheControl.Companion.FORCE_NETWORK
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
+import okio.buffer
 import rx.Observable
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
-class UNext :
+@Source
+abstract class UNext :
     HttpSource(),
     ConfigurableSource {
-    override val name = "U-NEXT"
-    private val domain = "unext.jp"
-    override val baseUrl = "https://video.$domain"
-    override val lang = "ja"
     override val supportsLatest = true
 
-    private val apiUrl = "https://cc.$domain"
+    private val apiUrl = "https://cc.unext.jp"
     private val preferences: SharedPreferences by getPreferencesLazy()
     private val apiHeaders = headersBuilder()
         .set("Content-Type", "application/json")
@@ -192,16 +193,11 @@ class UNext :
         val ubookPath = playlistParse.playlistUrl.ubooks.first().content
         val zipUrl = "$base/$ubookPath".toHttpUrl().newBuilder().build().toString()
 
-        val headRequest = Request.Builder().url(zipUrl).headers(headers).head().build()
-        val contentLength = client.newCall(headRequest).execute().use {
-            it.header("Content-Length")?.toBigInteger()
-        } ?: throw Exception("Could not get Content-Length")
-
-        val zipHandler = ZipHandler(zipUrl, client, headers, "zip", contentLength)
-        val zip = zipHandler.populate()
-
-        val indexJson = zip.fetch("index.json", client).toString(Charsets.UTF_8).parseAs<UBookIndex>()
-        val drmJson = zip.fetch("drm.json", client).toString(Charsets.UTF_8).parseAs<UBookDrm>()
+        val byName = client.zipDirectory(zipUrl, headers).entries.associateBy { it.name }
+        val indexEntry = byName["index.json"] ?: throw Exception("index.json not found in ZIP")
+        val drmEntry = byName["drm.json"] ?: throw Exception("drm.json not found in ZIP")
+        val indexJson = client.readZipEntry(zipUrl, indexEntry, headers).buffer().inputStream().parseAs<UBookIndex>()
+        val drmJson = client.readZipEntry(zipUrl, drmEntry, headers).buffer().inputStream().parseAs<UBookDrm>()
 
         indexJson.spine.mapIndexed { i, spine ->
             val pageInfo = indexJson.pages[spine.pageId]
@@ -212,20 +208,19 @@ class UNext :
                 ?: throw Exception("DRM metadata not found for $entryName")
 
             val key = keys[drmData.keyId] ?: throw Exception("Decryption key not found for ${drmData.keyId}")
-            val zipEntry = zip.getEntry(entryName) ?: throw Exception("Entry not found in CD: $entryName")
+            val entry = byName[entryName] ?: throw Exception("Entry not found in CD: $entryName")
 
             val requestData = ImageRequestData(
                 zipUrl,
-                zip.zipStartOffset,
-                zipEntry.localFileHeaderRelativeOffset.toLong(),
-                zipEntry.compressedSize,
+                entry.localHeaderOffset,
+                entry.compressedSize,
+                entry.method,
                 key,
                 drmData.iv,
                 drmData.originalFileSize,
-            )
+            ).toJsonString()
 
-            val fragment = requestData.toJsonString()
-            Page(i, imageUrl = "http://127.0.0.1/#$fragment")
+            Page(i, imageUrl = "http://127.0.0.1/#$requestData")
         }
     }
 

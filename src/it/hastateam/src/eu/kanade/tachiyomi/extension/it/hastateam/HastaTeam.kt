@@ -1,17 +1,14 @@
 package eu.kanade.tachiyomi.extension.it.hastateam
 
 import eu.kanade.tachiyomi.multisrc.pizzareader.PizzaReader
+import keiyoushi.annotation.Source
 import keiyoushi.network.rateLimit
-import kotlinx.serialization.json.Json
+import okhttp3.OkHttpClient
 
-class HastaTeam :
-    PizzaReader(
-        "Hasta Team",
-        "https://reader.hastateam.com",
-        "it",
-    ) {
-    override val client = super.client.newBuilder()
-        .addInterceptor { chain ->
+@Source
+abstract class HastaTeam : PizzaReader() {
+    override fun OkHttpClient.Builder.configureClient() = apply {
+        addInterceptor { chain ->
             val url = chain.request().url.newBuilder()
                 .scheme("https")
                 .build()
@@ -22,11 +19,6 @@ class HastaTeam :
 
             chain.proceed(request)
         }
-        .rateLimit(1)
-        .build()
-
-    override val json = Json {
-        ignoreUnknownKeys = true
-        coerceInputValues = true
+        rateLimit(1)
     }
 }

@@ -2,14 +2,20 @@ package eu.kanade.tachiyomi.extension.it.juinjutsuteamreader
 
 import eu.kanade.tachiyomi.multisrc.foolslide.FoolSlide
 import eu.kanade.tachiyomi.network.GET
+import eu.kanade.tachiyomi.network.await
 import eu.kanade.tachiyomi.source.model.MangasPage
+import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import okhttp3.Request
-import okhttp3.Response
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.annotation.Source
+import keiyoushi.network.get
+import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
-class JuinJutsuTeamReader : FoolSlide("Juin Jutsu Team Reader", "https://www.juinjutsureader.ovh", "it") {
+@Source
+abstract class JuinJutsuTeamReader : FoolSlide() {
     override val supportsLatest = false
 
     private val seenMangaUrls = mutableSetOf<String>()
@@ -18,15 +24,13 @@ class JuinJutsuTeamReader : FoolSlide("Juin Jutsu Team Reader", "https://www.jui
 
     private val chapterNumberRegex = Regex("""/(\d+(?:\.\d+)?)/(?:\d+/)?$""")
 
-    override fun popularMangaRequest(page: Int): Request {
+    override suspend fun getPopularManga(page: Int): MangasPage {
         if (page == 1) seenMangaUrls.clear()
-        return GET("$baseUrl/latest/$page/", headers)
-    }
-
-    override fun popularMangaParse(response: Response): MangasPage {
-        val mp = super.popularMangaParse(response)
-        val newMangas = mp.mangas.filter { seenMangaUrls.add(it.url) }
-        val hasNextPage = newMangas.isNotEmpty() && mp.hasNextPage
+        val request = GET("$baseUrl/latest/$page/", headers)
+        val document = client.newCall(request).await().asJsoup()
+        val mangas = document.select(popularMangaSelector()).map { popularMangaFromElement(it) }
+        val newMangas = mangas.filter { seenMangaUrls.add(it.url) }
+        val hasNextPage = newMangas.isNotEmpty() && popularMangaNextPageSelector().let { selector -> document.select(selector).first() != null }
         return MangasPage(newMangas, hasNextPage)
     }
 
@@ -40,17 +44,32 @@ class JuinJutsuTeamReader : FoolSlide("Juin Jutsu Team Reader", "https://www.jui
         }
     }
 
-    override fun chapterListParse(response: Response): List<SChapter> = super.chapterListParse(response).filter { chapter ->
-        !chapter.name.trim().matches(numberOnlyRegex)
+    override suspend fun fetchMangaUpdate(manga: SManga, chapters: List<SChapter>, fetchDetails: Boolean, fetchChapters: Boolean): SMangaUpdate {
+        val document: Document? = if (fetchDetails || fetchChapters) {
+            client.get(baseUrl + manga.url, adultHeaders).asJsoup()
+        } else {
+            null
+        }
+
+        val sManga = if (fetchDetails) {
+            mangaDetailsParse(document!!).apply { url = manga.url }
+        } else {
+            manga
+        }
+
+        val sChapters = if (fetchChapters) {
+            document!!.select(chapterListSelector())
+                .map { chapterFromElement(it) }
+                .filter { !it.name.trim().matches(numberOnlyRegex) }
+        } else {
+            chapters
+        }
+
+        return SMangaUpdate(sManga, sChapters)
     }
 
-    override fun chapterListRequest(manga: SManga): Request = super.chapterListRequest(manga).newBuilder()
-        .removeHeader("If-Modified-Since")
-        .removeHeader("If-None-Match")
-        .build()
-
-    override fun pageListRequest(chapter: SChapter): Request = super.pageListRequest(chapter).newBuilder()
-        .removeHeader("If-Modified-Since")
-        .removeHeader("If-None-Match")
-        .build()
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
+        val document = client.get(baseUrl + chapter.url, adultHeaders).asJsoup()
+        return pageListParse(document)
+    }
 }

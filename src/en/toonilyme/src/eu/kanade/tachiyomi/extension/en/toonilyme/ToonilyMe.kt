@@ -1,7 +1,7 @@
 package eu.kanade.tachiyomi.extension.en.toonilyme
 
-import eu.kanade.tachiyomi.multisrc.madtheme.MadTheme
+import eu.kanade.tachiyomi.multisrc.mangak.MangaKSource
+import keiyoushi.annotation.Source
 
-class ToonilyMe : MadTheme("Toonily.me", "https://toonily.me", "en") {
-    override val useSlugSearch = true
-}
+@Source
+abstract class ToonilyMe : MangaKSource()

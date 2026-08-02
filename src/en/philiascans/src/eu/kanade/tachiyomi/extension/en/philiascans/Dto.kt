@@ -26,7 +26,7 @@ class Item(
     fun toSManga(baseUrl: String) = SManga.create().apply {
         url = slug
         title = this@Item.title
-        thumbnail_url = if (coverImageUrl?.startsWith("http") == true) coverImageUrl else "$baseUrl/$coverImageUrl"
+        thumbnail_url = coverImageUrl?.let { if (it.startsWith("http")) it else "$baseUrl/$it" }
     }
 }
 
@@ -45,20 +45,20 @@ class DetailsResponse(
         title = this@DetailsResponse.title
         description = buildString {
             synopsis?.let { append(it) }
-            alternativeTitles?.let {
+            alternativeTitles?.takeIf { it.isNotEmpty() }?.let {
                 append("\n\nAlternative Titles:\n")
-                append(alternativeTitles.joinToString("\n") { "- $it" })
+                append(it.joinToString("\n") { altTitle -> "- $altTitle" })
             }
         }
         author = authors?.joinToString { it.name }
         artist = artists?.joinToString { it.name }
         genre = genres?.joinToString { it.name }
-        status = when (this@DetailsResponse.status) {
-            "ON_GOING" -> SManga.ONGOING
-            "COMPLETED" -> SManga.COMPLETED
+        status = when (this@DetailsResponse.status?.lowercase()) {
+            "on_going" -> SManga.ONGOING
+            "completed" -> SManga.COMPLETED
             else -> SManga.UNKNOWN
         }
-        thumbnail_url = if (coverImageUrl?.startsWith("http") == true) coverImageUrl else "$baseUrl/$coverImageUrl"
+        thumbnail_url = coverImageUrl?.let { if (it.startsWith("http")) it else "$baseUrl/$it" }
     }
 }
 
@@ -87,7 +87,8 @@ class ChapterItem(
     fun toSChapter(mangaSlug: String): SChapter = SChapter.create().apply {
         url = "$mangaSlug/$slug"
         val lock = if (isLocked) "🔒 " else ""
-        name = lock + (title?.takeIf { it.isNotBlank() } ?: "Chapter $number")
+        val validTitle = title?.takeIf { it.isNotBlank() && it != "null" && it != number }
+        name = lock + if (validTitle != null) "Chapter $number - $validTitle" else "Chapter $number"
         date_upload = dateFormat.tryParse(publishedAt)
         chapter_number = number.toFloat()
     }

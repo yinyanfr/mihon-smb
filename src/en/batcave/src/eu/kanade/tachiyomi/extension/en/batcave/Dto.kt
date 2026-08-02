@@ -5,7 +5,7 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 class XFilters(
-    @SerialName("filter_items") private val filterItems: XFilterItems,
+    @SerialName("filter_items") val filterItems: XFilterItems,
 ) {
     val publishers get() = filterItems.publisher.values
     val genres get() = filterItems.genre.values
@@ -44,6 +44,24 @@ class Chapter(
 )
 
 @Serializable
+class ChapterRequestBody(
+    @SerialName("news_id") private val newsId: String,
+    @SerialName("chapter_id") private val chapterId: String,
+)
+
+@Serializable
+class ChapterApiResponse(
+    val data: Images,
+)
+
+@Serializable
 class Images(
     val images: List<String> = emptyList(),
+)
+
+@Serializable
+class RelatedComic(
+    val name: String,
+    val url: String,
+    val thumbnail: String?,
 )

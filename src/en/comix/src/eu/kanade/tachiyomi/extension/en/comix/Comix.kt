@@ -27,6 +27,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
 import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.annotation.Source
 import keiyoushi.network.rateLimit
 import keiyoushi.utils.applicationContext
 import keiyoushi.utils.firstInstanceOrNull
@@ -40,6 +41,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Request
 import okhttp3.Response
 import okio.Buffer
+import org.json.JSONObject
 import org.jsoup.nodes.Document
 import rx.Observable
 import java.util.concurrent.Semaphore
@@ -47,14 +49,12 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
-class Comix :
+@Source
+abstract class Comix :
     HttpSource(),
     ConfigurableSource {
 
-    override val name = "Comix"
-    override val baseUrl = "https://comix.to"
-    private val apiUrl = "https://comix.to/api/v1"
-    override val lang = "en"
+    private val apiUrl get() = "$baseUrl/api/v1"
     override val supportsLatest = true
     override val supportsRelatedMangas = false
     override val disableRelatedMangasBySearch = true
@@ -70,7 +70,7 @@ class Comix :
             if (response.code != 404) return@addInterceptor response
 
             val url = request.url.toString()
-            val fallbacks = listOf("/si/", "/i/", "/sii/", "/ii/")
+            val fallbacks = listOf("/i5/", "/si/", "/i/", "/sii/", "/ii/")
                 .map { url.replaceFirst(SCRAMBLE_PATH_FALLBACK_REGEX, it) }
                 .filter { it != url }
 
@@ -103,7 +103,12 @@ class Comix :
         val isScrambled = imageUrl.contains("#scrambled")
         val isV3 = urlWithoutFragment.toHttpUrlOrNull()?.queryParameterNames?.contains("v3") == true
         val isLegacyScramble = isScrambled && !isV3
-        val requestHeaders = if (imageHost.isNotEmpty() && !imageHost.contains("comix.to") && !isLegacyScramble) {
+        val baseUrlHost = baseUrl.toHttpUrl().host
+        val requestHeaders = if (
+            imageHost.isNotEmpty() &&
+            !imageHost.endsWith(baseUrlHost) &&
+            !isLegacyScramble
+        ) {
             headersBuilder()
                 .removeAll("Origin")
                 .build()
@@ -137,7 +142,14 @@ class Comix :
         }
         val contentRating = request.url.queryParameter("content_rating")
             ?: preferences.contentRating()
-        val effectiveContentRating = contentRating.ifEmpty { "pornographic" }
+        val effectiveContentRating = contentRating
+            .split(',')
+            .lastOrNull { it.isNotBlank() }
+            .orEmpty()
+            .ifEmpty { "pornographic" }
+        val expectedKeyword = JSONObject.quote(
+            request.url.queryParameter("q") ?: request.url.queryParameter("keyword").orEmpty(),
+        )
         val searchResponse = document.extractBrowseResponse() ?: runInWebView(
             document = document,
             initializationScript = """
@@ -159,13 +171,17 @@ class Comix :
                 """
                     (function () {
                         const payloadKey = '__comixBrowsePayload';
-                        const capture = parsed => {
+                        const expectedKeyword = $expectedKeyword;
+                        const capture = (parsed, allowEmpty = false) => {
                             try {
+                                if (parsed && Array.isArray(parsed.items)) {
+                                    parsed = { result: parsed };
+                                }
                                 if (
                                     parsed &&
                                     parsed.result &&
                                     Array.isArray(parsed.result.items) &&
-                                    parsed.result.items.length > 0
+                                    (allowEmpty || parsed.result.items.length > 0)
                                 ) {
                                     window[payloadKey] = JSON.stringify(parsed);
                                     window.$interfaceName.passPayload(window[payloadKey]);
@@ -184,16 +200,66 @@ class Comix :
                         } catch (e) {}
 
                         if (window[payloadKey]) return window[payloadKey];
-                        if (JSON.parse.__comixBrowseCaptureInstalled) return null;
+                        if (window.__comixBrowseCaptureInstalled) return null;
+                        window.__comixBrowseCaptureInstalled = true;
+
+                        const captureText = text => {
+                            try {
+                                if (text) capture(JSON.parse(text), true);
+                            } catch (e) {}
+                        };
+
+                        const shouldCaptureUrl = rawUrl => {
+                            try {
+                                const url = new URL(rawUrl || '', window.location.origin);
+                                if (!url.pathname.includes('/api/v1/manga')) return false;
+                                if (!expectedKeyword) return true;
+                                return url.searchParams.get('keyword') === expectedKeyword;
+                            } catch (e) {
+                                return false;
+                            }
+                        };
+
+                        const originalFetch = window.fetch;
+                        if (typeof originalFetch === 'function') {
+                            window.fetch = function () {
+                                return originalFetch.apply(this, arguments).then(response => {
+                                    try {
+                                        const url = response && response.url || '';
+                                        if (shouldCaptureUrl(url)) {
+                                            response.clone().text().then(captureText).catch(() => {});
+                                        }
+                                    } catch (e) {}
+                                    return response;
+                                });
+                            };
+                        }
+
+                        const originalOpen = XMLHttpRequest.prototype.open;
+                        const originalSend = XMLHttpRequest.prototype.send;
+                        XMLHttpRequest.prototype.open = function (method, url) {
+                            this.__comixBrowseUrl = String(url || '');
+                            return originalOpen.apply(this, arguments);
+                        };
+                        XMLHttpRequest.prototype.send = function () {
+                            this.addEventListener('load', function () {
+                                try {
+                                    if (shouldCaptureUrl(this.__comixBrowseUrl)) {
+                                        captureText(this.responseText);
+                                    }
+                                } catch (e) {}
+                            });
+                            return originalSend.apply(this, arguments);
+                        };
+
                         const originalParse = JSON.parse;
                         const proxiedParse = new Proxy(originalParse, {
                             apply(target, thisArg, args) {
                                 const parsed = Reflect.apply(target, thisArg, args);
-                                capture(parsed);
+                                if (!expectedKeyword) capture(parsed);
                                 return parsed;
                             }
                         });
-                        proxiedParse.__comixBrowseCaptureInstalled = true;
                         JSON.parse = proxiedParse;
                         return window[payloadKey] || null;
                     })();
@@ -240,17 +306,6 @@ class Comix :
 
     // ============================== Search ===============================
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        if (query.isNotBlank()) {
-            val queryUrl = query.trim().toHttpUrlOrNull()
-            if (queryUrl != null) {
-                val host = queryUrl.host.removePrefix("www.")
-                if (host == baseUrl.toHttpUrl().host.removePrefix("www.") && queryUrl.pathSegments.size >= 2 && queryUrl.pathSegments[0] == "title") {
-                    val mangaId = queryUrl.pathSegments[1].substringBefore("-")
-                    return mangaDetailsRequest(SManga.create().apply { this.url = "/$mangaId" })
-                }
-            }
-        }
-
         val withFilters = baseUrl.toHttpUrl().newBuilder()
             .addPathSegment("browse")
             .apply {
@@ -300,11 +355,11 @@ class Comix :
             }
 
             if (query.isNotBlank()) {
-                addQueryParameter("keyword", query)
+                addQueryParameter("q", query)
                 build().queryParameterNames
                     .filter { it.startsWith("order[") }
                     .forEach(::removeAllQueryParameters)
-                addQueryParameter("order[relevance]", "desc")
+                addQueryParameter("sort", "relevance:desc")
             }
 
             addQueryParameter("page", page.toString())
@@ -315,7 +370,28 @@ class Comix :
 
     override fun searchMangaParse(response: Response) = throw UnsupportedOperationException()
 
-    override fun fetchSearchManga(page: Int, query: String, filters: FilterList): Observable<MangasPage> = fetchMangaListFromBrowse(searchMangaRequest(page, query, filters))
+    override fun fetchSearchManga(page: Int, query: String, filters: FilterList): Observable<MangasPage> {
+        titlePathFromQuery(query)?.let { titlePath ->
+            return fetchMangaDetails(SManga.create().apply { url = titlePath })
+                .map { MangasPage(listOf(it), false) }
+        }
+
+        return fetchMangaListFromBrowse(searchMangaRequest(page, query, filters))
+    }
+
+    private fun titlePathFromQuery(query: String): String? {
+        val queryUrl = query.trim()
+            .takeIf { it.isNotEmpty() }
+            ?.toHttpUrlOrNull()
+            ?: return null
+
+        val host = queryUrl.host.removePrefix("www.")
+        if (host != baseUrl.toHttpUrl().host.removePrefix("www.")) return null
+        if (queryUrl.pathSegments.size < 2 || queryUrl.pathSegments[0] != "title") return null
+
+        val mangaId = queryUrl.pathSegments[1].substringBefore("-")
+        return mangaId.takeIf { it.isNotBlank() }?.let { "/$it" }
+    }
 
     /**
      * Apply every content-related source-level preference (rating, types,
@@ -332,8 +408,8 @@ class Comix :
     }
 
     private fun HttpUrl.Builder.applyContentRatingPreference() {
-        preferences.contentRating().takeIf { it.isNotEmpty() }?.let {
-            addQueryParameter("content_rating", it)
+        Filters.getContentRatingsUpTo(preferences.contentRating()).takeIf { it.isNotEmpty() }?.let {
+            addQueryParameter("content_rating", it.joinToString(","))
         }
     }
 
@@ -467,6 +543,18 @@ class Comix :
                             state.submitted = true;
                             window.$$interfaceName.passPayload(JSON.stringify(state.items));
                         };
+                        const findNextButton = page => {
+                            const buttons = [...document.querySelectorAll('.mchap-foot button')]
+                                .filter(button => !button.disabled);
+                            return buttons.find(button => {
+                                const label = [
+                                    button.getAttribute('aria-label'),
+                                    button.getAttribute('title'),
+                                    button.textContent
+                                ].filter(Boolean).join(' ');
+                                return /\bnext\b/i.test(label);
+                            }) || buttons.find(button => Number(button.textContent?.trim()) === page + 1);
+                        };
                         const capture = parsed => {
                             try {
                                 const items = parsed?.result?.items;
@@ -481,17 +569,19 @@ class Comix :
 
                                 const meta = parsed.result.meta || parsed.result.pagination || {};
                                 const page = meta.page || 1;
+                                const lastPage = meta.lastPage || meta.last_page || page;
+                                const hasNext = meta.hasNext || page < lastPage;
                                 if (state.seen.has(page)) return true;
 
                                 state.seen.add(page);
                                 state.items.push(...items);
-                                if (meta.hasNext && !state.nextClicks.has(page)) {
+                                if (hasNext && !state.nextClicks.has(page)) {
                                     state.nextClicks.add(page);
                                     window.$$interfaceName.resetTimer();
                                     let tries = 0;
                                     const interval = setInterval(() => {
-                                        const button = document.querySelector('.mchap-foot button[aria-label*=Next]');
-                                        if (button && !button.disabled) {
+                                        const button = findNextButton(page);
+                                        if (button) {
                                             button.click();
                                             clearInterval(interval);
                                         } else if (++tries > 50) {
@@ -734,8 +824,11 @@ class Comix :
                         val requestUrl = request.url?.toString()?.toHttpUrlOrNull()
                             ?: return super.shouldInterceptRequest(view, request)
 
-                        val allowedHost = requestUrl.host == "comix.to" ||
+                        val baseUrlHost = baseUrl.toHttpUrl().host
+                        val allowedHost = requestUrl.host.endsWith(baseUrlHost) ||
                             requestUrl.host.endsWith(".comix.to") ||
+                            requestUrl.host == "comix.to" ||
+                            requestUrl.host == "comix.ws" ||
                             requestUrl.host == "challenges.cloudflare.com"
                         if (!allowedHost) return emptyResponse
                         return super.shouldInterceptRequest(view, request)
@@ -867,7 +960,7 @@ class Comix :
             setDefaultValue(DEFAULT_CONTENT_RATING)
         }.let(screen::addPreference)
 
-        // Content preferences (mirrors comix.to's "Content preferences" modal):
+        // Content preferences (mirrors the site's "Content preferences" modal):
         //   - Default Types       — checkbox per type, all checked by default
         //   - Default Demographics — same, all checked by default
         //   - Blocked Genres      — opt-in list of genres to always exclude
@@ -945,7 +1038,7 @@ class Comix :
             summary = "Include the site's narrative tag list (e.g. Demons, " +
                 "Vampires, Time Travel) alongside the curated genres in the " +
                 "manga details. Off by default — the curated set matches what " +
-                "comix.to itself shows on the page."
+                "the site itself shows on the page."
             setDefaultValue(false)
         }.let(screen::addPreference)
 
@@ -1021,7 +1114,7 @@ class Comix :
         private const val SCRIPT_RETRY_INTERVAL_MS = 100L
         private const val WEBVIEW_WIDTH = 1080
         private const val WEBVIEW_HEIGHT = 1920
-        private val SCRAMBLE_PATH_FALLBACK_REGEX = Regex("/s?i+/")
+        private val SCRAMBLE_PATH_FALLBACK_REGEX = Regex("/(?:i5|s?i+)/")
         private val CHAPTER_NUM_REGEX = Regex("""Ch\.([\d.]+)""")
         private val GROUP_ID_REGEX = Regex("""/groups/(\d+)""")
         private val CHAPTER_ID_REGEX = Regex("""/(\d+)-""")

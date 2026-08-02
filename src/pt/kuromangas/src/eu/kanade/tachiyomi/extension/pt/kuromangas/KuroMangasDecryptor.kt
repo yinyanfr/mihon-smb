@@ -1,37 +1,104 @@
 package eu.kanade.tachiyomi.extension.pt.kuromangas
 
 import android.util.Base64
+import eu.kanade.tachiyomi.network.GET
+import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.utils.parseAs
 import keiyoushi.utils.readIntBigEndian
 import keiyoushi.utils.readIntLittleEndian
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.jsonObject
 import okhttp3.Interceptor
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
+import java.io.IOException
 import java.security.MessageDigest
 import java.time.LocalDate
 import java.time.ZoneOffset
 
-const val VITE_API_ENC_KEY = "5ato8l674shksfE2oMwajkun9TuYTusF4jKdqEwhUEft9787147pasde345h"
 const val HOSTNAME_PART = "kuromangas.com::v2"
 const val ANTIBOT = "x9_4v2_b"
+const val DEFAULT_ENC_KEY = "5ato8l674shksfE2oMmieshonuYTusF4jKdqEwhUEft9787147sadr32s"
 
-class KuroMangasDecryptor {
+private val encKeyRegex = Regex("""ENCRYPTION_KEY\s*[:=]\s*["']([^"']+)["']""")
+private val anyAssignRegex = Regex("""[:=]\s*["']([^"']+)["']""")
+
+class KuroMangasDecryptor(val baseUrl: String, val client: OkHttpClient) {
+    private var viteApiEncKey: String? = DEFAULT_ENC_KEY
+    private var headerCookie: Pair<String, String?>? = "X-Kuro-Verify" to client.getCookie(baseUrl, "kuro_v")
+    private var hasErrored: Boolean = false
 
     fun vSecureInterceptor() = Interceptor { chain ->
-        val response = chain.proceed(chain.request())
-        val dataKey = response.headers["x-kuro-datakey"] ?: return@Interceptor response
 
-        val secureDto = response.parseAs<SecureDto>()
-        val decryptedJson = decrypt(secureDto.vSecure, dataKey)
+        fun newRequest() = chain.request().newBuilder().apply {
+            headerCookie?.let { (name, value) -> header(name, value ?: "") }
+        }.build()
 
-        response.newBuilder()
-            .body(decryptedJson.toResponseBody(response.body.contentType()))
-            .build()
+        fun execute(request: Request, retried: Boolean): Response {
+            val response = chain.proceed(request)
+
+            if (response.code == 401 || response.code == 403) {
+                response.close()
+                if (retried) throw IOException("Credentials expired, open webivew and retry")
+                reloadCredentials()
+                return execute(newRequest(), true)
+            }
+
+            val dataKey = response.headers["x-kuro-datakey"] ?: return response
+
+            val decrypted = runCatching {
+                val dto = response.parseAs<SecureDto>()
+                decrypt(dto.vSecure, dataKey)
+            }.getOrNull()
+
+            if (decrypted == null) {
+                response.close()
+                if (retried) throw IOException("Failed to decrypt")
+                reloadCredentials()
+                return execute(newRequest(), true)
+            }
+
+            return response.newBuilder()
+                .body(decrypted.toResponseBody(response.body.contentType()))
+                .build()
+        }
+
+        execute(newRequest(), false)
     }
 
-    // index-Dn_X_unp.js: Ik2() + Hk2()
-    fun decrypt(vSecure: String, dataKey: String): String {
+    fun reloadCredentials() {
+        val indexJsUrl = client.newCall(GET(baseUrl)).execute()
+            .asJsoup()
+            .selectFirst("script[src*=index]")
+            ?.absUrl("src")
+
+        if (indexJsUrl != null) {
+            val js = client.newCall(GET(indexJsUrl)).execute().body.string()
+
+            viteApiEncKey = encKeyRegex.find(js)?.groupValues?.get(1)
+
+            for (cookie in client.getCookies(baseUrl)) {
+                val key = getHeaderKey(js, cookie.name) ?: continue
+                headerCookie = key to cookie.value
+                return
+            }
+        }
+    }
+
+    private fun getHeaderKey(js: String, cookieName: String): String? {
+        val match = Regex("""\b\w+\s*[:=]\s*["']$cookieName["']""")
+            .find(js) ?: return null
+
+        return anyAssignRegex
+            .find(js, match.range.last + 1)
+            ?.groupValues
+            ?.get(1)
+    }
+
+    // index-*.js: Ik2() + Hk2()
+    fun decrypt(vSecure: String, dataKey: String): String? {
         val password = derivePassword()
         val encrypted = Base64.decode(vSecure, Base64.DEFAULT)
         val salt = encrypted.copyOfRange(8, 16)
@@ -44,8 +111,13 @@ class KuroMangasDecryptor {
         rabbit.crypt(plaintext)
 
         val jsonStr = String(plaintext, Charsets.UTF_8)
-        val wrapper = jsonStr.parseAs<JsonElement>()
-        val inner = wrapper.jsonObject[dataKey] ?: error("Failed to decrypt response")
+
+        val wrapper = try {
+            jsonStr.parseAs<JsonElement>()
+        } catch (e: Exception) {
+            return null
+        }
+        val inner = wrapper.jsonObject[dataKey] ?: return null
         return inner.toString()
     }
 
@@ -55,7 +127,7 @@ class KuroMangasDecryptor {
             .digest(toHash.toByteArray())
             .joinToString("") { "%02x".format(it) }
             .substring(0, 8)
-        return VITE_API_ENC_KEY + md5Part
+        return viteApiEncKey + md5Part
     }
 
     fun evpBytesToKey(password: ByteArray, salt: ByteArray, keyLen: Int = 16, ivLen: Int = 8): Pair<ByteArray, ByteArray> {

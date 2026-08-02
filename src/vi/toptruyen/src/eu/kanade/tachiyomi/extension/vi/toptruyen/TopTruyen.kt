@@ -1,7 +1,6 @@
 package eu.kanade.tachiyomi.extension.vi.toptruyen
 
 import android.content.SharedPreferences
-import android.widget.Toast
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.multisrc.wpcomics.WPComics
 import eu.kanade.tachiyomi.network.GET
@@ -11,6 +10,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.annotation.Source
 import keiyoushi.network.rateLimit
 import keiyoushi.utils.getPreferences
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -21,17 +21,16 @@ import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.TimeZone
 
-class TopTruyen :
-    WPComics(
-        "Top Truyen",
-        "https://www.toptruyenzone3.com",
-        "vi",
-        dateFormat = SimpleDateFormat("dd-MM-yyyy", Locale.ROOT).apply {
-            timeZone = TimeZone.getTimeZone("Asia/Ho_Chi_Minh")
-        },
-        gmtOffset = null,
-    ),
+@Source
+abstract class TopTruyen :
+    WPComics(),
     ConfigurableSource {
+
+    override val dateFormat = SimpleDateFormat("dd-MM-yyyy", Locale.ROOT).apply {
+        timeZone = TimeZone.getTimeZone("Asia/Ho_Chi_Minh")
+    }
+
+    override val gmtOffset = null
 
     override fun pageListParse(response: Response): List<Page> = response.asJsoup().select("div[id^=page_].page-chapter img").mapIndexed { index, element ->
         val img = element.attr("abs:src")
@@ -88,6 +87,66 @@ class TopTruyen :
 
     override val genresSelector = ".categories-detail ul.nav li:not(.active) a"
 
+    override fun getFilterList(): FilterList {
+        if (genreList.isEmpty()) {
+            genreList = listOf(
+                Pair(null, "Tất cả"),
+                Pair("action", "Action"),
+                Pair("truong-thanh", "Adult"),
+                Pair("phieu-luu", "Adventure"),
+                Pair("anime", "Anime"),
+                Pair("chuyen-sinh", "Chuyển Sinh"),
+                Pair("comedy", "Comedy"),
+                Pair("nau-an", "Cooking"),
+                Pair("comic", "Comic"),
+                Pair("co-dai", "Cổ Đại"),
+                Pair("drama", "Drama"),
+                Pair("dam-my", "Đam Mỹ"),
+                Pair("ecchi", "Ecchi"),
+                Pair("fantasy", "Fantasy"),
+                Pair("harem", "Harem"),
+                Pair("historical", "Historical"),
+                Pair("horror", "Horror"),
+                Pair("live-action", "Live action"),
+                Pair("manga", "Manga"),
+                Pair("manhua", "Manhua"),
+                Pair("manhwa", "Manhwa"),
+                Pair("martial-arts", "Martial Arts"),
+                Pair("mature", "Mature"),
+                Pair("mystery", "Mystery"),
+                Pair("mecha", "Mecha"),
+                Pair("ngon-tinh", "Ngôn Tình"),
+                Pair("one-shot", "One shot"),
+                Pair("psychological", "Psychological"),
+                Pair("romance", "Romance"),
+                Pair("school-life", "School Life"),
+                Pair("shoujo", "Shoujo"),
+                Pair("shoujo-ai", "Shoujo Ai"),
+                Pair("shounen", "Shounen"),
+                Pair("slice-of-life", "Slice of Life"),
+                Pair("seinen", "Seinen"),
+                Pair("smut", "Smut"),
+                Pair("sci-fi", "Sci-fi"),
+                Pair("soft-yaoi", "Soft Yaoi"),
+                Pair("soft-yuri", "Soft Yuri"),
+                Pair("sports", "Sports"),
+                Pair("supernatural", "Supernatural"),
+                Pair("josei", "Josei"),
+                Pair("thieu-nhi", "Thiếu Nhi"),
+                Pair("trinh-tham", "Trinh Thám"),
+                Pair("truyen-mau", "Truyện Màu"),
+                Pair("tragedy", "Tragedy"),
+                Pair("webtoon", "Webtoon"),
+                Pair("xuyen-khong", "Xuyên Không"),
+                Pair("gender-bender", "Gender Bender"),
+                Pair("yuri", "Yuri"),
+                Pair("he-thong", "Hệ Thống"),
+                Pair("yaoi", "Yaoi"),
+            )
+        }
+        return super.getFilterList()
+    }
+
     // Configurable, automatic change domain
     private val preferences: SharedPreferences = getPreferences()
     private var hasCheckedRedirect = false
@@ -99,7 +158,7 @@ class TopTruyen :
             val response = chain.proceed(originalRequest)
             if (!hasCheckedRedirect && preferences.getBoolean(AUTO_CHANGE_DOMAIN_PREF, false)) {
                 hasCheckedRedirect = true
-                val originalHost = super.baseUrl.toHttpUrl().host
+                val originalHost = baseUrl.toHttpUrl().host
                 val newHost = response.request.url.host
                 if (newHost != originalHost) {
                     val newBaseUrl = "${response.request.url.scheme}://$newHost"
@@ -113,35 +172,7 @@ class TopTruyen :
         .rateLimit(5)
         .build()
 
-    init {
-        preferences.getString(DEFAULT_BASE_URL_PREF, null).let { prefDefaultBaseUrl ->
-            if (prefDefaultBaseUrl != super.baseUrl) {
-                preferences.edit()
-                    .putString(BASE_URL_PREF, super.baseUrl)
-                    .putString(DEFAULT_BASE_URL_PREF, super.baseUrl)
-                    .apply()
-            }
-        }
-    }
-
-    override val baseUrl by lazy { getPrefBaseUrl() }
-
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
-        val defaultUrl = super.baseUrl
-        val baseUrlPref = androidx.preference.EditTextPreference(screen.context).apply {
-            key = BASE_URL_PREF
-            title = BASE_URL_PREF_TITLE
-            summary = BASE_URL_PREF_SUMMARY
-            setDefaultValue(defaultUrl)
-            dialogTitle = BASE_URL_PREF_TITLE
-            dialogMessage = "Default: $defaultUrl"
-            setOnPreferenceChangeListener { _, _ ->
-                Toast.makeText(screen.context, RESTART_APP, Toast.LENGTH_LONG).show()
-                true
-            }
-        }
-        screen.addPreference(baseUrlPref)
-
         val autoDomainPref = androidx.preference.SwitchPreferenceCompat(screen.context).apply {
             key = AUTO_CHANGE_DOMAIN_PREF
             title = AUTO_CHANGE_DOMAIN_TITLE
@@ -151,15 +182,8 @@ class TopTruyen :
         screen.addPreference(autoDomainPref)
     }
 
-    private fun getPrefBaseUrl(): String = preferences.getString(BASE_URL_PREF, super.baseUrl)!!
-
     companion object {
-        private const val DEFAULT_BASE_URL_PREF = "defaultBaseUrl"
-        private const val RESTART_APP = "Khởi chạy lại ứng dụng để áp dụng thay đổi."
-        private const val BASE_URL_PREF_TITLE = "Ghi đè URL cơ sở"
         private const val BASE_URL_PREF = "overrideBaseUrl"
-        private const val BASE_URL_PREF_SUMMARY =
-            "Dành cho sử dụng tạm thời, cập nhật tiện ích sẽ xóa cài đặt."
         private const val AUTO_CHANGE_DOMAIN_PREF = "autoChangeDomain"
         private const val AUTO_CHANGE_DOMAIN_TITLE = "Tự động cập nhật domain"
         private const val AUTO_CHANGE_DOMAIN_SUMMARY =

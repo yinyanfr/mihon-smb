@@ -6,6 +6,7 @@ import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.annotation.Source
 import keiyoushi.utils.parseAs
 import kotlinx.serialization.Serializable
 import okhttp3.FormBody
@@ -14,24 +15,21 @@ import org.jsoup.nodes.Element
 import java.text.SimpleDateFormat
 import java.util.Locale
 
-class BegaTranslation :
-    Madara(
-        "Bega Translation",
-        "https://begatranslation.com",
-        "es",
-        SimpleDateFormat("dd MMMM, yyyy", Locale("es")),
-    ) {
+@Source
+abstract class BegaTranslation : Madara() {
+    override val dateFormat = SimpleDateFormat("dd MMMM, yyyy", Locale("es"))
     override val useNewChapterEndpoint = true
     override val mangaSubString = "series"
 
     override fun popularMangaFromElement(element: Element): SManga = super.popularMangaFromElement(element).apply {
         thumbnail_url = thumbnail_url?.replaceFirst("-175x238", "")
     }
+
     override fun searchMangaFromElement(element: Element): SManga = super.searchMangaFromElement(element).apply {
         thumbnail_url = thumbnail_url?.replaceFirst("-193x278", "")
     }
 
-    val rkJsonRegex = """(?s)var\s+RK\s*=\s*(\{.*?\});""".toRegex()
+    private val rkJsonRegex = """(?s)var\s+RK\s*=\s*(\{.*?\});""".toRegex()
 
     override fun pageListParse(document: Document): List<Page> {
         val pages = super.pageListParse(document)
@@ -53,16 +51,21 @@ class BegaTranslation :
 
         val readerLanding = client.newCall(POST(rkData.readerApi, headers, formBody)).execute().asJsoup()
 
-        val readerUrl = readerLanding.selectFirst("a.rk-btn-read")!!.absUrl("href")
+        val readerBtn = readerLanding.selectFirst("a.rk-btn-read")
 
-        val readerHeaders = headersBuilder()
-            .set("Referer", readerLanding.location())
-            .build()
+        val chapterReader = if (readerBtn != null) {
+            val readerUrl = readerBtn.absUrl("href")
+            val readerHeaders = headersBuilder()
+                .set("Referer", readerLanding.location())
+                .build()
 
-        val chapterReader = client.newCall(GET(readerUrl, readerHeaders)).execute().asJsoup()
+            client.newCall(GET(readerUrl, readerHeaders)).execute().asJsoup()
+        } else {
+            readerLanding
+        }
 
-        return chapterReader.select("img.rk-img").mapIndexed { index, elements ->
-            Page(index, imageUrl = elements.absUrl("src"))
+        return chapterReader.select("img.rk-img").mapIndexed { index, element ->
+            Page(index, imageUrl = element.absUrl("src"))
         }
     }
 

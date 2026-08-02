@@ -16,6 +16,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.annotation.Source
 import keiyoushi.network.rateLimit
 import keiyoushi.utils.firstInstanceOrNull
 import keiyoushi.utils.getPreferences
@@ -39,14 +40,12 @@ import java.io.IOException
 import java.security.MessageDigest
 import kotlin.time.Duration.Companion.seconds
 
-class Zaimanhua :
+@Source
+abstract class Zaimanhua :
     HttpSource(),
     ConfigurableSource {
-    override val lang = "zh"
     override val supportsLatest = true
 
-    override val name = "再漫画"
-    override val baseUrl = "https://manhua.zaimanhua.com"
     private val mobileBaseUrl = "https://m.zaimanhua.com"
     private val apiUrl = "https://v4api.zaimanhua.com/app/v1"
     private val accountApiUrl = "https://account-api.zaimanhua.com/v1"
@@ -135,7 +134,7 @@ class Zaimanhua :
         if (token.isBlank()) return false
         val parts = token.split(".")
         if (parts.size != 3) throw Exception("token格式错误，不符合JWT规范")
-        val payload = Base64.decode(parts[1], Base64.DEFAULT).toString(Charsets.UTF_8).parseAs<JwtPayload>()
+        val payload = Base64.decode(parts[1], Base64.URL_SAFE or Base64.NO_WRAP).toString(Charsets.UTF_8).parseAs<JwtPayload>()
         if (payload.expirationTime * 1000 < System.currentTimeMillis()) return false
 
         val response = client.newCall(

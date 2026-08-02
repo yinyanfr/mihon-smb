@@ -2,27 +2,16 @@ package eu.kanade.tachiyomi.extension.en.manganelo
 
 import eu.kanade.tachiyomi.multisrc.mangabox.MangaBox
 import eu.kanade.tachiyomi.source.model.SManga
-import okhttp3.Request
+import keiyoushi.annotation.Source
 
-class Manganato :
-    MangaBox(
-        "Manganato",
-        arrayOf(
-            "www.natomanga.com",
-            "www.nelomanga.com",
-            "www.nelomanga.net",
-            "www.manganato.gg",
-        ),
-        "en",
-    ) {
+@Source
+abstract class Manganato : MangaBox() {
 
-    override val id: Long = 1024627298672457456
-
-    override fun mangaDetailsRequest(manga: SManga): Request {
+    override fun getMangaUrl(manga: SManga): String {
         if (LEGACY_DOMAINS.any { manga.url.startsWith(it) }) {
             throw Exception(MIGRATE_MESSAGE)
         }
-        return super.mangaDetailsRequest(manga)
+        return super.getMangaUrl(manga)
     }
     companion object {
         private val LEGACY_DOMAINS = arrayOf(

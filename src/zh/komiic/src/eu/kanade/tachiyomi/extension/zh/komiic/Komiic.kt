@@ -1,6 +1,7 @@
 package eu.kanade.tachiyomi.extension.zh.komiic
 
 import android.util.Base64
+import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.source.ConfigurableSource
@@ -9,37 +10,36 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import keiyoushi.annotation.Source
+import keiyoushi.network.post
+import keiyoushi.source.KeiSource
 import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.parseAs
 import keiyoushi.utils.parseGraphQLAs
-import okhttp3.HttpUrl.Companion.toHttpUrl
+import kotlinx.serialization.json.JsonElement
+import okhttp3.HttpUrl
 import okhttp3.Interceptor
-import okhttp3.Request
+import okhttp3.OkHttpClient
 import okhttp3.RequestBody
-import okhttp3.Response
-import rx.Observable
 import java.io.IOException
 
-class Komiic :
-    HttpSource(),
+@Source
+abstract class Komiic :
+    KeiSource(),
     ConfigurableSource {
-    override val name = "Komiic"
-    override val lang = "zh"
-    override val baseUrl get() = "https://${mirrorUrls[urlIndex]}"
-    override val supportsLatest = true
 
-    private val urlIndex get() = pref.getString(BASE_URL_PREF, "0")!!.toInt().coerceAtMost(mirrorUrls.size - 1)
-    override val client = network.client.newBuilder()
-        .addInterceptor { chain ->
+    override fun OkHttpClient.Builder.configureClient() = apply {
+        addInterceptor { chain ->
             val origin = chain.request()
-            val request = origin.takeUnless { urlIndex > 0 && it.url.host.endsWith("komiic.com") } ?: origin.run {
-                val newHost = url.host.removeSuffix("komiic.com") + mirrorUrls[urlIndex]
+            val host = baseUrl.removePrefix("https://")
+            val request = origin.takeUnless { host != "komiic.com" && it.url.host.endsWith("komiic.com") } ?: origin.run {
+                val newHost = url.host.removeSuffix("komiic.com") + host
                 newBuilder().url(url.newBuilder().host(newHost).build()).build()
             }
             chain.proceed(request)
         }
-        .addInterceptor { chain ->
+        addInterceptor { chain ->
             val origin = chain.request()
             if (origin.url.toString().contains("api/image")) {
                 refreshToken(chain)
@@ -52,7 +52,8 @@ class Komiic :
             } else {
                 chain.proceed(origin)
             }
-        }.build()
+        }
+    }
 
     private fun refreshToken(chain: Interceptor.Chain) {
         client.cookieJar.loadForRequest(chain.request().url).find { it.name == "komiic-access-token" }?.let {
@@ -67,110 +68,106 @@ class Komiic :
     private val pref by getPreferencesLazy()
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
-        preferencesInternal(screen.context).forEach(screen::addPreference)
+        ListPreference(screen.context).apply {
+            key = "CHAPTER_FILTER"
+            title = "章節列表顯示"
+            summary = "%s"
+            entries = arrayOf("同時顯示卷和章節", "僅顯示章節", "僅顯示卷")
+            entryValues = arrayOf("all", "chapter", "book")
+            setDefaultValue("all")
+        }.also(screen::addPreference)
     }
 
-    // Customize ===================================================================================
+    // Customize
 
     private val SManga.id get() = url.substringAfterLast("/")
     private val SChapter.id get() = url.substringAfterLast("/")
 
-    private fun RequestBody.request(fragment: String? = null): Request {
-        val extra = fragment?.let { "#$it" } ?: ""
-        return POST("$baseUrl/api/query$extra", headers, this)
+    private suspend fun OkHttpClient.query(body: RequestBody) = post("$baseUrl/api/query", body)
+
+    private suspend fun mangasPage(page: Int, orderBy: OrderBy): MangasPage {
+        val pagination = Pagination((page - 1) * PAGE_SIZE, orderBy)
+        val response = client.query(commonQuery(ListingVariables(pagination)))
+        return parseListing(response.parseGraphQLAs())
     }
 
-    // Popular Manga ===============================================================================
+    // Popular
+    override suspend fun getPopularManga(page: Int) = mangasPage(page, OrderBy.MONTH_VIEWS)
 
-    override fun popularMangaRequest(page: Int): Request {
-        val pagination = Pagination((page - 1) * PAGE_SIZE, OrderBy.MONTH_VIEWS)
-        return commonQuery(ListingVariables(pagination)).request()
+    // Update
+    override suspend fun getLatestUpdates(page: Int) = mangasPage(page, OrderBy.DATE_UPDATED)
+
+    // Search
+    override fun getFilterList(data: JsonElement?) = buildFilterList()
+
+    override suspend fun getMangaByUrl(url: HttpUrl) = url.takeIf { url.pathSegments[0] == "comic" }?.let {
+        val response = client.query(idsQuery(listOf(url.pathSegments[1])))
+        parseListing(response.parseGraphQLAs()).mangas.first()
     }
 
-    override fun popularMangaParse(response: Response) = parseListing(response.parseGraphQLAs())
-
-    // Latest Updates ==============================================================================
-
-    override fun latestUpdatesRequest(page: Int): Request {
-        val pagination = Pagination((page - 1) * PAGE_SIZE, OrderBy.DATE_UPDATED)
-        return commonQuery(ListingVariables(pagination)).request()
-    }
-
-    override fun latestUpdatesParse(response: Response) = parseListing(response.parseGraphQLAs())
-
-    // Search Manga ================================================================================
-
-    override fun getFilterList() = buildFilterList()
-
-    override fun fetchSearchManga(page: Int, query: String, filters: FilterList): Observable<MangasPage> {
-        if (query.startsWith("https://")) {
-            val url = query.toHttpUrl()
-            if (url.host != baseUrl.toHttpUrl().host) {
-                throw Exception("不支持这个 URL")
-            }
-            val id = url.pathSegments[1]
-            return fetchSearchManga(page, PREFIX_ID_SEARCH + id, filters)
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val body = if (query.isNotBlank()) {
+            searchQuery(query)
+        } else {
+            val variables = ListingVariables(Pagination((page - 1) * PAGE_SIZE))
+            filters.filterIsInstance<KomiicFilter>().forEach { it.apply(variables) }
+            listingQuery(variables)
         }
-        return super.fetchSearchManga(page, query, filters)
+        val response = client.query(body)
+        return parseListing(response.parseGraphQLAs())
     }
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList) = if (query.startsWith(PREFIX_ID_SEARCH)) {
-        idsQuery(query.removePrefix(PREFIX_ID_SEARCH)).request()
-    } else if (query.isNotBlank()) {
-        searchQuery(query).request()
-    } else {
-        val variables = ListingVariables(Pagination((page - 1) * PAGE_SIZE))
-        filters.filterIsInstance<KomiicFilter>().forEach { it.apply(variables) }
-        listingQuery(variables).request()
-    }
-
-    override fun searchMangaParse(response: Response) = parseListing(response.parseGraphQLAs())
-
-    // Manga Details ===============================================================================
-
+    // Manga & Chapter
     override fun getMangaUrl(manga: SManga) = baseUrl + manga.url
-
-    override fun mangaDetailsRequest(manga: SManga) = mangaDetailQuery(manga.id).request()
-
-    override fun mangaDetailsParse(response: Response) = response.parseGraphQLAs<DataDto>().comicById!!.toSManga()
-
-    // Chapter List ================================================================================
 
     override fun getChapterUrl(chapter: SChapter) = baseUrl + chapter.url + "/images/all"
 
-    override fun chapterListRequest(manga: SManga) = chapterListQuery(manga.id).request(manga.id)
-
-    override fun chapterListParse(response: Response): List<SChapter> {
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        val response = client.query(mangaQuery(manga.id, fetchDetails, fetchChapters))
         val data = response.parseGraphQLAs<DataDto>()
-        val chapters = data.chaptersByComicId!!.toMutableList()
-        when (pref.getString(CHAPTER_FILTER_PREF, "all")) {
-            "chapter" -> chapters.retainAll { it.type == "chapter" }
-            "book" -> chapters.retainAll { it.type == "book" }
-            else -> {}
+
+        val sManga = if (fetchDetails) data.comicById!!.toSManga() else manga
+        val sChapters = if (fetchChapters) {
+            val rawChapters = data.chaptersByComicId!!.toMutableList()
+            when (pref.getString("CHAPTER_FILTER", "all")) {
+                "chapter" -> rawChapters.retainAll { it.type == "chapter" }
+                "book" -> rawChapters.retainAll { it.type == "book" }
+                else -> {}
+            }
+            rawChapters.sortWith(
+                compareByDescending<ChapterDto> { it.type }.thenByDescending { it.serial.toFloatOrNull() },
+            )
+            rawChapters.map { it.toSChapter(manga.url) }
+        } else {
+            chapters
         }
-        chapters.sortWith(
-            compareByDescending<ChapterDto> { it.type }.thenByDescending { it.serial.toFloatOrNull() },
-        )
-        val mangaUrl = "/comic/${response.request.url.fragment}"
-        return chapters.map { it.toSChapter(mangaUrl) }
+
+        return SMangaUpdate(sManga, sChapters)
     }
 
-    // Page List ===================================================================================
+    override val supportsRelatedMangas get() = true
 
-    override fun pageListRequest(chapter: SChapter) = pageListQuery(chapter.id).request(chapter.url)
+    override suspend fun fetchRelatedMangaList(manga: SManga): List<SManga> {
+        val response = client.query(recommendQuery(manga.id))
+        val comicIds = response.parseGraphQLAs<DataDto>().recommendComicById!!
+        return parseListing(client.query(idsQuery(comicIds)).parseGraphQLAs()).mangas
+    }
 
-    override fun pageListParse(response: Response): List<Page> {
+    // Page
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
+        val response = client.query(pageListQuery(chapter.id))
         val data = response.parseGraphQLAs<DataDto>()
-        val chapterUrl = response.request.url.fragment!!
         return data.imagesByChapterId!!.mapIndexed { index, image ->
-            Page(index, "$chapterUrl/page/${index + 1}", "$baseUrl/api/image/${image.kid}")
+            Page(index, baseUrl + "${chapter.url}/page/${index + 1}", "$baseUrl/api/image/${image.kid}")
         }
     }
 
-    // Image =======================================================================================
-
+    // Image
     override fun imageRequest(page: Page) = super.imageRequest(page).newBuilder()
-        .addHeader("accept", "*/*").addHeader("referer", page.url).build()
-
-    override fun imageUrlParse(response: Response) = throw UnsupportedOperationException()
+        .addHeader("Accept", "*/*").header("Referer", page.url).build()
 }

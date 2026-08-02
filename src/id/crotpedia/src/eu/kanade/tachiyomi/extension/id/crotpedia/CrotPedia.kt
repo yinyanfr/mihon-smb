@@ -1,10 +1,13 @@
 package eu.kanade.tachiyomi.extension.id.crotpedia
 
 import eu.kanade.tachiyomi.multisrc.zmanga.ZManga
-import java.text.SimpleDateFormat
+import keiyoushi.annotation.Source
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-class CrotPedia : ZManga("CrotPedia", "https://crotpedia.net", "id", dateFormat = SimpleDateFormat("MMMM dd, yyyy", Locale("id"))) {
+@Source
+abstract class CrotPedia : ZManga() {
+    override val dateFormatter = DateTimeFormatter.ofPattern("MMMM dd, yyyy", Locale("id"))
 
     override val hasProjectPage = false
 }

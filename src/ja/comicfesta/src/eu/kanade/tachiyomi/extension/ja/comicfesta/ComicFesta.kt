@@ -2,6 +2,7 @@ package eu.kanade.tachiyomi.extension.ja.comicfesta
 
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
+import eu.kanade.tachiyomi.multisrc.clipstudioreader.ClipStudioReader
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.model.FilterList
@@ -9,7 +10,7 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.util.asJsoup
-import keiyoushi.lib.clipstudioreader.ClipStudioReader
+import keiyoushi.annotation.Source
 import keiyoushi.lib.cookieinterceptor.CookieInterceptor
 import keiyoushi.utils.extractNextJs
 import keiyoushi.utils.getPreferencesLazy
@@ -18,22 +19,21 @@ import okhttp3.Request
 import okhttp3.Response
 import java.io.IOException
 
-class ComicFesta :
+@Source
+abstract class ComicFesta :
     ClipStudioReader(),
     ConfigurableSource {
-    override val name = "Comic Festa"
-    private val domain = "comic.iowl.jp"
-    override val baseUrl = "https://$domain"
-    override val lang = "ja"
+
     override val supportsLatest = true
 
+    private val domain = baseUrl.toHttpUrl().host
     private val preferences by getPreferencesLazy()
     private val rscHeaders = headersBuilder()
         .add("rsc", "1")
         .build()
 
     override val client = super.client.newBuilder()
-        .addInterceptor(CookieInterceptor(domain, listOf("checked_age" to "1", "sp_display" to "1", "cf_checked_age_guest" to "1", "cf_checked_age" to "1")))
+        .addNetworkInterceptor(CookieInterceptor(domain, listOf("checked_age" to "1", "sp_display" to "1", "cf_checked_age_guest" to "1", "cf_checked_age" to "1")))
         .addInterceptor {
             val request = it.request()
             val response = it.proceed(request)

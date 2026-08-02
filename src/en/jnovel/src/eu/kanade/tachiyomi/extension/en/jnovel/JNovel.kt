@@ -11,26 +11,26 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
 import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.annotation.Source
 import keiyoushi.lib.e4p.E4PInterceptor
 import keiyoushi.lib.e4p.E4PManifestReader
 import keiyoushi.utils.extractNextJs
 import keiyoushi.utils.firstInstance
 import keiyoushi.utils.getPreferencesLazy
+import keiyoushi.utils.parseAs
 import okhttp3.HttpUrl.Builder
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import java.io.IOException
 
-class JNovel :
+@Source
+abstract class JNovel :
     HttpSource(),
     ConfigurableSource {
-    override val name = "J-Novel"
-    private val domain = "j-novel.club"
-    override val baseUrl = "https://$domain"
-    override val lang = "en"
     override val supportsLatest = false
 
+    private val domain = baseUrl.toHttpUrl().host
     private val viewerUrl = "https://labs.$domain/embed/v2"
     private val preferences by getPreferencesLazy()
     private val rscHeaders = headersBuilder()
@@ -113,10 +113,8 @@ class JNovel :
     override fun pageListParse(response: Response): List<Page> {
         val document = response.asJsoup()
         val embedUrl = document.selectFirst("iframe[src^='$viewerUrl']")?.absUrl("src") ?: throw Exception("Log in via WebView and purchase this chapter to read.")
-        val embedDocument = client.newCall(GET(embedUrl, headers)).execute().asJsoup()
-        val manifestUrlStr = embedDocument.body().absUrl("data-e4p-manifest")
-        val manifestUrl = manifestUrlStr.toHttpUrl()
-        return manifestReader.extractPagesFromEncryptedManifest(manifestUrl)
+        val manifestUrl = client.newCall(GET("$embedUrl/info.json", headers)).execute().parseAs<Manifest>().e4pManifest
+        return manifestReader.extractPagesFromEncryptedManifest(manifestUrl.toHttpUrl())
     }
 
     override fun getFilterList() = FilterList(

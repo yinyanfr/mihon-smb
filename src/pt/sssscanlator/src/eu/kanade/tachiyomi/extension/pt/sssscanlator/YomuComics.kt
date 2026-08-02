@@ -9,6 +9,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
 import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.annotation.Source
 import keiyoushi.network.rateLimit
 import keiyoushi.utils.extractNextJs
 import keiyoushi.utils.firstInstanceOrNull
@@ -24,18 +25,10 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 
-class YomuComics : HttpSource() {
-
-    override val name = "Yomu Comics"
-
-    override val baseUrl = "https://yomu.com.br"
-
-    override val lang = "pt-BR"
+@Source
+abstract class YomuComics : HttpSource() {
 
     override val supportsLatest = true
-
-    // SSSScanlator
-    override val id = 1497838059713668619
 
     override val client: OkHttpClient = network.client.newBuilder()
         .rateLimit(5)
@@ -43,7 +36,6 @@ class YomuComics : HttpSource() {
 
     override fun headersBuilder() = super.headersBuilder()
         .add("Referer", "$baseUrl/")
-        .add("x-yomu-web", "true")
 
     // Popular
 
@@ -131,11 +123,15 @@ class YomuComics : HttpSource() {
     }
 
     override fun pageListParse(response: Response): List<Page> {
-        val data = response.extractNextJs<ChapterPageDto> {
-            it is JsonObject &&
-                it["chapter"] is JsonObject &&
-                (it["chapter"] as JsonObject)["imagens_lista"] is JsonArray
+        val matches = mutableListOf<JsonElement>()
+        response.extractNextJs<JsonElement> { element ->
+            val chapter = (element as? JsonObject)?.get("chapter") as? JsonObject
+            if (chapter?.get("imagens_lista") is JsonArray) matches.add(element)
+            false
         }
+
+        val chapterArrays = matches.map { ((it as JsonObject)["chapter"] as JsonObject)["imagens_lista"] as JsonArray }
+        val data = selectRealArray(chapterArrays)?.let { matches[it].parseAs<ChapterPageDto>() }
 
         if (data != null && data.chapter.images.isNotEmpty()) {
             return data.chapter.images.mapIndexed { index, imageUrl ->
@@ -143,7 +139,7 @@ class YomuComics : HttpSource() {
             }
         }
 
-        throw IllegalStateException("Nenhuma pagina encontrada para este capitulo")
+        error("Nenhuma pagina encontrada para este capitulo")
     }
 
     override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException()
@@ -171,15 +167,13 @@ class YomuComics : HttpSource() {
         val pagination = resultString.parseAs<LibraryResponseDto>().pagination
 
         // mangas field name changes frequently
-        val mangasList = resultString
+        val allArrays = resultString
             .parseAs<JsonElement>()
             .jsonObject.values
-            .firstNotNullOfOrNull { v ->
-                val jsonArray = when (v) {
-                    is JsonArray -> v
-
-                    // value can be base64 encoded
-                    is JsonPrimitive -> v.contentOrNull?.let { base64Str ->
+            .mapNotNull { value ->
+                when (value) {
+                    is JsonArray -> value
+                    is JsonPrimitive -> value.contentOrNull?.let { base64Str ->
                         runCatching {
                             Base64.decode(base64Str, Base64.DEFAULT)
                                 .toString(Charsets.UTF_8)
@@ -188,13 +182,12 @@ class YomuComics : HttpSource() {
                     }
                     else -> null
                 }
+            }
 
-                jsonArray?.runCatching {
-                    map { it.parseAs<LibraryMangaDto>() }
-                }?.getOrNull()
-            } ?: emptyList()
+        val rIndex = selectRealArray(allArrays)
+        val mangasList = allArrays[rIndex!!].map { it.parseAs<LibraryMangaDto>() }
 
-        val mangas = mangasList.map(LibraryMangaDto::toSManga)
+        val mangas = mangasList.filter { it.type != "novel" }.map(LibraryMangaDto::toSManga)
         val hasNextPage = pagination.page < pagination.totalPages
         return MangasPage(mangas, hasNextPage)
     }
