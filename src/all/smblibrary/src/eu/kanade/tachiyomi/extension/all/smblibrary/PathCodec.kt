@@ -55,19 +55,7 @@ object PathCodec {
         "&archiveSize=${descriptor.archiveSize}" +
         "&archiveMtime=${descriptor.archiveLastModifiedMillis}"
 
-    fun thumbnailUrl(mangaPath: String, lastModifiedMillis: Long): String = "$BASE/thumbnail" +
-        "?manga=${enc(normalizeRelativePath(mangaPath))}" +
-        "&mtime=$lastModifiedMillis"
-
     fun mangaPath(url: String): String = normalizeRelativePath(params(url).getValue("path"))
-
-    fun thumbnail(url: String): ThumbnailDescriptor {
-        val params = params(url)
-        return ThumbnailDescriptor(
-            mangaPath = normalizeRelativePath(params.getValue("manga")),
-            lastModifiedMillis = params.getValue("mtime").toLong(),
-        )
-    }
 
     fun chapter(url: String): ChapterDescriptor {
         val params = params(url)

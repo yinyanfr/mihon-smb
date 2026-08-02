@@ -20,9 +20,9 @@ The extension lives in [`src/all/smblibrary`](src/all/smblibrary).
 - Detects direct image folders, `.zip` files, `.cbz` files, and images stored directly in a manga folder as chapters.
 - Reads folder images as SMB streams without loading a complete chapter into memory.
 - Downloads ZIP/CBZ archives to the extension's private cache for random-access reading.
-- Uses local first-page images as covers, including streaming the first readable ZIP/CBZ image without downloading the complete archive.
+- Uses a bundled SMB Library illustration as the default cover without scanning manga folders or archives.
 - Supports natural sorting and manga sorting by name or SMB modification time in either direction. The default is newest first.
-- Keeps SMB credentials in Android preferences and never places them in manga, chapter, page, or thumbnail URLs.
+- Keeps SMB credentials in Android preferences and never places them in manga, chapter, or page URLs.
 
 Supported images: `.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`.
 
@@ -51,6 +51,7 @@ Manga Root/
 ```
 
 Images directly inside a manga folder are grouped into one virtual chapter named `本卷`. Unsupported files are ignored.
+Every direct child folder remains visible even when it contains no supported chapters. All entries use the same bundled placeholder cover, so browsing the library does not trigger additional SMB requests.
 
 ## SMB Settings
 
@@ -113,7 +114,7 @@ src/all/smblibrary/tools/create-smb-test-data.sh
 
 ## Current Limitations
 
-RAR/CBR, PDF, EPUB, 7z, nested archives, online metadata scraping, arbitrary-depth browsing, NAS discovery, SMB1, and NAS write operations are not supported.
+Per-manga covers, RAR/CBR, PDF, EPUB, 7z, nested archives, online metadata scraping, arbitrary-depth browsing, NAS discovery, SMB1, and NAS write operations are not supported.
 
 ## Upstream And License
 

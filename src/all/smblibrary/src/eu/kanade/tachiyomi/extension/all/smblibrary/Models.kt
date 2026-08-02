@@ -25,11 +25,6 @@ data class RemoteEntry(
     val lastModifiedMillis: Long,
 )
 
-data class ThumbnailDescriptor(
-    val mangaPath: String,
-    val lastModifiedMillis: Long,
-)
-
 enum class ChapterType(val id: String) {
     ImageDirectory("dir"),
     Archive("archive"),

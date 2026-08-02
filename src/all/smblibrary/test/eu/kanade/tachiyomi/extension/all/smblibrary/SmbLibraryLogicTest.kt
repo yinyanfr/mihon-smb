@@ -7,8 +7,6 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
 import java.net.ConnectException
@@ -17,7 +15,6 @@ import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.nio.file.Files
 import java.util.zip.ZipEntry
-import java.util.zip.ZipOutputStream
 
 class SmbLibraryLogicTest {
     @Test
@@ -68,15 +65,6 @@ class SmbLibraryLogicTest {
             lastModifiedMillis = 20,
         )
         assertEquals(chapter, PathCodec.chapter(PathCodec.chapterUrl(chapter)))
-    }
-
-    @Test
-    fun thumbnailPathRoundTripsSpecialCharacters() {
-        val descriptor = ThumbnailDescriptor("Special 漫画 [作者] #1/日本語 😀", 123456789)
-        assertEquals(
-            descriptor,
-            PathCodec.thumbnail(PathCodec.thumbnailUrl(descriptor.mangaPath, descriptor.lastModifiedMillis)),
-        )
     }
 
     @Test
@@ -198,31 +186,6 @@ class SmbLibraryLogicTest {
     }
 
     @Test
-    fun coverCandidatesPreferNaturalFirstRootImage() {
-        val entries = listOf(
-            RemoteEntry("M/10.jpg", "10.jpg", false, 1, 1),
-            RemoteEntry("M/chapter 1", "chapter 1", true, 0, 1),
-            RemoteEntry("M/2.jpg", "2.jpg", false, 1, 1),
-            RemoteEntry("M/book.cbz", "book.cbz", false, 10, 1),
-        )
-
-        assertEquals("2.jpg", CoverCandidateSelector.firstRootImage(entries)?.name)
-    }
-
-    @Test
-    fun coverCandidatesSortFoldersAndArchivesNaturally() {
-        val entries = listOf(
-            RemoteEntry("M/Chapter 10", "Chapter 10", true, 0, 1),
-            RemoteEntry("M/2.cbz", "2.cbz", false, 10, 1),
-            RemoteEntry("M/Chapter 2", "Chapter 2", true, 0, 1),
-            RemoteEntry("M/10.zip", "10.zip", false, 10, 1),
-        )
-
-        assertEquals(listOf("Chapter 2", "Chapter 10"), CoverCandidateSelector.imageFolders(entries).map { it.name })
-        assertEquals(listOf("2.cbz", "10.zip"), CoverCandidateSelector.archives(entries).map { it.name })
-    }
-
-    @Test
     fun archiveCleanupKeepsProtectedOversizedFile() {
         val directory = Files.createTempDirectory("smb-library-cache-test").toFile()
         try {
@@ -270,34 +233,4 @@ class SmbLibraryLogicTest {
         assertTrue(repository.translate("M", IOException()) is SmbLibraryException.ReadDisconnected)
     }
 
-    @Test
-    fun archiveCoverClosesZipStreamAndRemoteHandle() {
-        val archive = ByteArrayOutputStream().use { bytes ->
-            ZipOutputStream(bytes).use { zip ->
-                zip.putNextEntry(ZipEntry("notes.txt"))
-                zip.write("notes".toByteArray())
-                zip.closeEntry()
-                zip.putNextEntry(ZipEntry("2.png"))
-                zip.write(byteArrayOf(1, 2, 3))
-                zip.closeEntry()
-            }
-            bytes.toByteArray()
-        }
-        var streamClosed = false
-        var handleClosed = false
-        val input = object : ByteArrayInputStream(archive) {
-            override fun close() {
-                streamClosed = true
-                super.close()
-            }
-        }
-        val remote = RemoteFileHandle("M/chapter.cbz", input, listOf(AutoCloseable { handleClosed = true }))
-
-        val cover = ArchiveCoverReader.open(remote)!!
-        assertEquals("2.png", cover.path)
-        cover.close()
-
-        assertTrue(streamClosed)
-        assertTrue(handleClosed)
-    }
 }

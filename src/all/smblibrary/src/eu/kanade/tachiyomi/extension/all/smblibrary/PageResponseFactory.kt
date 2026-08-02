@@ -31,14 +31,6 @@ object PageResponseFactory {
         closeable = handle,
     )
 
-    fun fromCover(url: String, handle: CoverHandle): Response = response(
-        url = url,
-        mimeType = ContentDetector.mimeType(handle.path),
-        length = handle.length,
-        inputStream = handle.inputStream,
-        closeable = handle,
-    )
-
     fun fromBytes(url: String, mimeType: String, bytes: ByteArray): Response = response(
         url = url,
         mimeType = mimeType,

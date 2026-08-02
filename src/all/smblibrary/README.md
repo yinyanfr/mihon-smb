@@ -21,6 +21,7 @@ RAR/CBR, PDF, EPUB, 7z, nested archives, metadata scraping and cover generation 
 ## Mapping Rules
 
 - Direct folders under the configured SMB root are listed as manga.
+- Folders without supported manga content remain visible and open with an empty chapter list.
 - Manga can be sorted by natural name or SMB last-modified time, in ascending or descending order. The default is last modified descending (newest first).
 - Direct image subfolders under a manga folder become chapters.
 - `.zip` and `.cbz` files directly under a manga folder become chapters.
@@ -29,7 +30,7 @@ RAR/CBR, PDF, EPUB, 7z, nested archives, metadata scraping and cover generation 
 
 ## Covers
 
-Covers are resolved locally without sending manga titles to an online metadata service. The source uses the first naturally sorted image in the manga root, then the first image from a naturally sorted direct child folder, then the first readable image entry from the first ZIP/CBZ. Archive covers are streamed from SMB and do not require downloading the complete archive. Errors fall back to the built-in SMB Library placeholder.
+Every manga uses the same bundled SMB Library placeholder cover. Browsing performs only the root directory listing and does not open child folders, images, or archives to derive thumbnails.
 
 ## Build
 

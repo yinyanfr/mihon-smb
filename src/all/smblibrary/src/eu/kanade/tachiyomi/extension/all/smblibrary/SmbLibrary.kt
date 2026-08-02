@@ -1,11 +1,6 @@
 package eu.kanade.tachiyomi.extension.all.smblibrary
 
 import android.content.SharedPreferences
-import android.graphics.Bitmap
-import android.graphics.Canvas
-import android.graphics.Color
-import android.graphics.Paint
-import android.graphics.RectF
 import android.os.Handler
 import android.os.Looper
 import android.text.InputType
@@ -13,6 +8,7 @@ import android.widget.Toast
 import androidx.preference.EditTextPreference
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
+import eu.kanade.tachiyomi.extension.R
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.UnmeteredSource
@@ -21,73 +17,79 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.applicationContext
 import keiyoushi.utils.getPreferencesLazy
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonElement
 import okhttp3.Interceptor
+import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
-import rx.Observable
-import rx.schedulers.Schedulers
-import java.io.ByteArrayOutputStream
 
 @Source
 abstract class SmbLibrary :
-    HttpSource(),
+    KeiSource(),
     ConfigurableSource,
     UnmeteredSource {
     override val supportsLatest = false
 
-    override val client = network.client.newBuilder()
-        .addInterceptor(::interceptSmbImage)
-        .build()
+    override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addInterceptor(::interceptSmbImage)
 
     private val preferences: SharedPreferences by getPreferencesLazy()
     private val repository = SmbRepository()
     private val archiveCache = ArchiveCache(repository)
-    private val coverProvider = CoverProvider(repository)
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val defaultThumbnailBytes by lazy { createDefaultThumbnail() }
+    private val defaultCoverBytes by lazy {
+        applicationContext.resources.openRawResource(R.drawable.default_manga_cover).use { it.readBytes() }
+    }
     private val placeholderHtmlBytes by lazy { createPlaceholderHtml().toByteArray(Charsets.UTF_8) }
 
-    override fun fetchPopularManga(page: Int): Observable<MangasPage> = Observable.fromCallable {
+    override suspend fun getPopularManga(page: Int): MangasPage = withContext(Dispatchers.IO) {
         MangasPage(listMangaFolders(MangaSort.DEFAULT), hasNextPage = false)
-    }.subscribeOn(Schedulers.io())
+    }
 
-    override fun fetchSearchManga(page: Int, query: String, filters: FilterList): Observable<MangasPage> = Observable.fromCallable {
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = withContext(Dispatchers.IO) {
         val normalizedQuery = query.trim()
         val sort = filters.filterIsInstance<MangaSortFilter>().firstOrNull()?.selected ?: MangaSort.DEFAULT
         val mangas = listMangaFolders(sort)
             .filter { normalizedQuery.isEmpty() || it.title.contains(normalizedQuery, ignoreCase = true) }
         MangasPage(mangas, hasNextPage = false)
-    }.subscribeOn(Schedulers.io())
+    }
 
-    override fun getFilterList(): FilterList = FilterList(MangaSortFilter())
+    override fun getFilterList(data: JsonElement?): FilterList = FilterList(MangaSortFilter())
 
-    override fun fetchLatestUpdates(page: Int): Observable<MangasPage> = Observable.just(MangasPage(emptyList(), false))
+    override suspend fun getLatestUpdates(page: Int): MangasPage = MangasPage(emptyList(), false)
 
-    override fun fetchMangaDetails(manga: SManga): Observable<SManga> = Observable.fromCallable {
-        val path = PathCodec.mangaPath(manga.url)
-        val metadata = repository.metadata(currentConfig(), path)
-        manga.apply {
-            title = path.substringAfterLast('/')
-            description = "SMB relative path: $path"
-            status = SManga.UNKNOWN
-            initialized = true
-            thumbnail_url = PathCodec.thumbnailUrl(path, metadata.lastModifiedMillis)
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate = withContext(Dispatchers.IO) {
+        val updatedManga = if (fetchDetails) {
+            val path = PathCodec.mangaPath(manga.url)
+            manga.apply {
+                title = path.substringAfterLast('/')
+                description = "SMB relative path: $path"
+                status = SManga.UNKNOWN
+                thumbnail_url = DEFAULT_COVER_URL
+            }
+        } else {
+            manga
         }
-    }.subscribeOn(Schedulers.io())
+        val updatedChapters = if (fetchChapters) chapterList(updatedManga) else chapters
+        SMangaUpdate(updatedManga, updatedChapters)
+    }
 
-    override fun fetchChapterList(manga: SManga): Observable<List<SChapter>> = Observable.fromCallable {
-        chapterList(manga)
-    }.subscribeOn(Schedulers.io())
-
-    override fun fetchPageList(chapter: SChapter): Observable<List<Page>> = Observable.fromCallable {
+    override suspend fun getPageList(chapter: SChapter): List<Page> = withContext(Dispatchers.IO) {
         pageList(chapter)
-    }.subscribeOn(Schedulers.io())
+    }
 
     override fun imageRequest(page: Page): Request = GET(page.imageUrl!!, headers)
 
@@ -130,7 +132,11 @@ abstract class SmbLibrary :
         }
 
         return when (request.url.encodedPath) {
-            "/thumbnail" -> thumbnailResponse(request)
+            "/cover" -> PageResponseFactory.fromBytes(
+                url = request.url.toString(),
+                mimeType = "image/png",
+                bytes = defaultCoverBytes,
+            )
             "/page" -> {
                 val descriptor = PathCodec.page(request.url.toString())
                 val config = currentConfig()
@@ -167,7 +173,7 @@ abstract class SmbLibrary :
                 url = PathCodec.mangaUrl(entry.relativePath)
                 status = SManga.UNKNOWN
                 initialized = true
-                thumbnail_url = PathCodec.thumbnailUrl(entry.relativePath, entry.lastModifiedMillis)
+                thumbnail_url = DEFAULT_COVER_URL
             }
         }
     }
@@ -335,24 +341,6 @@ abstract class SmbLibrary :
         }
     }
 
-    private fun thumbnailResponse(request: Request): Response {
-        val handle = try {
-            val descriptor = PathCodec.thumbnail(request.url.toString())
-            coverProvider.open(currentConfig(), descriptor.mangaPath)
-        } catch (_: Throwable) {
-            null
-        }
-        return if (handle != null) {
-            PageResponseFactory.fromCover(request.url.toString(), handle)
-        } else {
-            PageResponseFactory.fromBytes(
-                url = request.url.toString(),
-                mimeType = "image/png",
-                bytes = defaultThumbnailBytes,
-            )
-        }
-    }
-
     private fun archiveFingerprint(config: SmbConfig, descriptor: PageDescriptor): ArchiveFingerprint {
         if (descriptor.archiveSize > 0L && descriptor.archiveLastModifiedMillis > 0L) {
             return ArchiveFingerprint(
@@ -370,36 +358,6 @@ abstract class SmbLibrary :
             size = archiveEntry.size,
             lastModifiedMillis = archiveEntry.lastModifiedMillis,
         )
-    }
-
-    private fun createDefaultThumbnail(): ByteArray {
-        val bitmap = Bitmap.createBitmap(320, 480, Bitmap.Config.ARGB_8888)
-        try {
-            val canvas = Canvas(bitmap)
-            val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-
-            canvas.drawColor(Color.rgb(36, 82, 74))
-            paint.color = Color.rgb(244, 241, 232)
-            canvas.drawRoundRect(RectF(52f, 72f, 268f, 348f), 22f, 22f, paint)
-
-            paint.color = Color.rgb(36, 82, 74)
-            canvas.drawRoundRect(RectF(82f, 116f, 238f, 136f), 8f, 8f, paint)
-            canvas.drawRoundRect(RectF(82f, 164f, 238f, 184f), 8f, 8f, paint)
-            canvas.drawRoundRect(RectF(82f, 212f, 190f, 232f), 8f, 8f, paint)
-
-            paint.color = Color.rgb(244, 241, 232)
-            paint.textAlign = Paint.Align.CENTER
-            paint.textSize = 32f
-            paint.isFakeBoldText = true
-            canvas.drawText("SMB", 160f, 405f, paint)
-
-            return ByteArrayOutputStream().use { output ->
-                bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
-                output.toByteArray()
-            }
-        } finally {
-            bitmap.recycle()
-        }
     }
 
     private fun createPlaceholderHtml(): String = """
@@ -458,19 +416,9 @@ abstract class SmbLibrary :
         else -> cause?.userMessage() ?: message ?: "SMB Library error"
     }
 
-    override fun popularMangaRequest(page: Int): Request = GET(baseUrl, headers)
-    override fun popularMangaParse(response: Response): MangasPage = throw UnsupportedOperationException()
-    override fun latestUpdatesRequest(page: Int): Request = GET(baseUrl, headers)
-    override fun latestUpdatesParse(response: Response): MangasPage = throw UnsupportedOperationException()
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request = GET(baseUrl, headers)
-    override fun searchMangaParse(response: Response): MangasPage = throw UnsupportedOperationException()
-    override fun mangaDetailsParse(response: Response): SManga = throw UnsupportedOperationException()
-    override fun chapterListParse(response: Response): List<SChapter> = throw UnsupportedOperationException()
-    override fun pageListParse(response: Response): List<Page> = throw UnsupportedOperationException()
-    override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException()
-
     companion object {
         private const val LOCAL_HOST = "smb.library.local"
+        private const val DEFAULT_COVER_URL = "https://$LOCAL_HOST/cover"
         private const val PREF_HOST = "smb_host"
         private const val PREF_PORT = "smb_port"
         private const val PREF_SHARE = "smb_share"
