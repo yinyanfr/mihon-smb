@@ -36,9 +36,7 @@ class SmbRepository {
         }
     }
 
-    fun list(config: eu.kanade.tachiyomi.extension.all.smblibrary.SmbConfig, relativePath: String): List<RemoteEntry> {
-        return browse(config) { list(relativePath) }
-    }
+    fun list(config: eu.kanade.tachiyomi.extension.all.smblibrary.SmbConfig, relativePath: String): List<RemoteEntry> = browse(config) { list(relativePath) }
 
     fun <T> browse(
         config: eu.kanade.tachiyomi.extension.all.smblibrary.SmbConfig,

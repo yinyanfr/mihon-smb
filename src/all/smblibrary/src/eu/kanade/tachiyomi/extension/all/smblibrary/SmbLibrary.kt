@@ -22,6 +22,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.annotation.Source
 import keiyoushi.utils.getPreferencesLazy
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -33,13 +34,11 @@ import rx.Observable
 import rx.schedulers.Schedulers
 import java.io.ByteArrayOutputStream
 
-class SmbLibrary :
+@Source
+abstract class SmbLibrary :
     HttpSource(),
     ConfigurableSource,
     UnmeteredSource {
-    override val name = "SMB Library"
-    override val baseUrl = "https://smb.library.local"
-    override val lang = "all"
     override val supportsLatest = false
 
     override val client = network.client.newBuilder()

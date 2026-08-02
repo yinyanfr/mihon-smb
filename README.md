@@ -1,5 +1,14 @@
 # Mihon SMB Library
 
+<p align="center">
+  <img src="src/all/smblibrary/artwork/smb-library-logo.png" alt="SMB Library logo" width="220">
+</p>
+
+<p align="center">
+  <a href="https://github.com/yinyanfr/mihon-smb/actions/workflows/smblibrary_release.yml"><img src="https://github.com/yinyanfr/mihon-smb/actions/workflows/smblibrary_release.yml/badge.svg" alt="Release SMB Library"></a>
+  <a href="https://github.com/yinyanfr/mihon-smb/releases/latest"><img src="https://img.shields.io/github/v/release/yinyanfr/mihon-smb?filter=smblibrary-v*&label=release" alt="Latest release"></a>
+</p>
+
 SMB Library is a Mihon/Tachiyomi-compatible source extension that reads a manga library directly from an SMB2/SMB3 share. It does not require Komga, Kavita, WebDAV, a custom HTTP service, or any server-side component on the NAS.
 
 The extension lives in [`src/all/smblibrary`](src/all/smblibrary).
@@ -79,6 +88,12 @@ Debug APKs are written under:
 ```text
 src/all/smblibrary/build/outputs/apk/debug/
 ```
+
+## Automated Releases
+
+Every push to `main` runs [Release SMB Library](.github/workflows/smblibrary_release.yml). The workflow increments the extension version code, runs unit tests and formatting checks, builds a signed release APK, commits the version increment, and publishes a GitHub Release with a SHA-256 checksum and recent SMB Library changes.
+
+Release signing uses the `SIGNING_KEY`, `ALIAS`, `KEY_STORE_PASSWORD`, and `KEY_PASSWORD` GitHub Actions secrets. Signing material is never stored in Git.
 
 The helper script below creates tiny, copyright-free SMB test fixtures:
 

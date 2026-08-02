@@ -16,11 +16,12 @@ data class MangaSort(
     }
 }
 
-class MangaSortFilter : Filter.Sort(
-    name = "Sort",
-    values = arrayOf("Name", "Modified time"),
-    state = Selection(MangaSortField.LastModified.ordinal, false),
-) {
+class MangaSortFilter :
+    Filter.Sort(
+        name = "Sort",
+        values = arrayOf("Name", "Modified time"),
+        state = Selection(MangaSortField.LastModified.ordinal, false),
+    ) {
     val selected: MangaSort
         get() {
             val selection = state ?: return MangaSort.DEFAULT

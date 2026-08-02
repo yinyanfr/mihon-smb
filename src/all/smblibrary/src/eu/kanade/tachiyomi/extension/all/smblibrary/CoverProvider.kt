@@ -41,6 +41,8 @@ class CoverProvider(
 }
 
 object ArchiveCoverReader {
+    private const val ZIP_BUFFER_SIZE = 128 * 1024
+
     fun open(remote: RemoteFileHandle): CoverHandle? {
         val zip = ZipInputStream(BufferedInputStream(remote.inputStream, ZIP_BUFFER_SIZE))
         try {
@@ -76,10 +78,6 @@ object ArchiveCoverReader {
         } finally {
             remote.close()
         }
-    }
-
-    private companion object {
-        const val ZIP_BUFFER_SIZE = 128 * 1024
     }
 }
 

@@ -1,0 +1,191 @@
+name: Release SMB Library
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: smblibrary-release-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish
+    if: github.repository == 'yinyanfr/mihon-smb' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout main branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - id: release-check
+        name: Check whether this push is already released
+        env:
+          PUSH_SHA: ${{ github.sha }}
+        run: |
+          git fetch --force --tags origin
+          existing_tag="$(git tag --contains "$PUSH_SHA" --list 'smblibrary-v*' | head -n 1)"
+          if [[ -n "$existing_tag" ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Push $PUSH_SHA is already included in $existing_tag."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Java
+        if: steps.release-check.outputs.skip != 'true'
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
+        with:
+          java-version: 17
+          distribution: temurin
+
+      - name: Set up Gradle
+        if: steps.release-check.outputs.skip != 'true'
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
+
+      - name: Prepare release signing key
+        if: steps.release-check.outputs.skip != 'true'
+        env:
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+          ALIAS: ${{ secrets.ALIAS }}
+          KEY_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          for value in SIGNING_KEY ALIAS KEY_STORE_PASSWORD KEY_PASSWORD; do
+            if [[ -z "${!value}" ]]; then
+              echo "::error::Required signing secret $value is not configured."
+              exit 1
+            fi
+          done
+          printf '%s' "$SIGNING_KEY" | base64 --decode > signingkey.jks
+          chmod 600 signingkey.jks
+
+      - id: version
+        name: Increment extension version
+        if: steps.release-check.outputs.skip != 'true'
+        run: |
+          version_file="src/all/smblibrary/build.gradle.kts"
+          version_code_count="$(grep -Ec '^[[:space:]]*versionCode = [0-9]+$' "$version_file")"
+          lib_version_count="$(grep -Ec '^[[:space:]]*libVersion = "[0-9]+\.[0-9]+"$' "$version_file")"
+          if [[ "$version_code_count" != 1 || "$lib_version_count" != 1 ]]; then
+            echo "::error::Unable to identify exactly one versionCode and libVersion in $version_file."
+            exit 1
+          fi
+
+          current_code="$(sed -nE 's/^[[:space:]]*versionCode = ([0-9]+)$/\1/p' "$version_file")"
+          lib_version="$(sed -nE 's/^[[:space:]]*libVersion = "([0-9]+\.[0-9]+)"$/\1/p' "$version_file")"
+          next_code="$((current_code + 1))"
+          VERSION_CODE="$next_code" perl -0pi -e 's/^([ \t]*versionCode[ \t]*=[ \t]*)\d+[ \t]*$/$1$ENV{VERSION_CODE}/m' "$version_file"
+
+          version_name="$lib_version.$next_code"
+          echo "code=$next_code" >> "$GITHUB_OUTPUT"
+          echo "name=$version_name" >> "$GITHUB_OUTPUT"
+          echo "tag=smblibrary-v$version_name" >> "$GITHUB_OUTPUT"
+
+      - name: Run tests and build release APK
+        if: steps.release-check.outputs.skip != 'true'
+        env:
+          ALIAS: ${{ secrets.ALIAS }}
+          KEY_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          chmod +x ./gradlew
+          ./gradlew \
+            :src:all:smblibrary:testDebugUnitTest \
+            :src:all:smblibrary:spotlessCheck \
+            :src:all:smblibrary:assembleRelease \
+            --stacktrace
+
+      - id: artifact
+        name: Prepare release asset
+        if: steps.release-check.outputs.skip != 'true'
+        env:
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+        run: |
+          mapfile -t apks < <(find src/all/smblibrary/build/outputs/apk/release -type f -name '*.apk' -print)
+          if [[ "${#apks[@]}" != 1 ]]; then
+            echo "::error::Expected exactly one release APK, found ${#apks[@]}."
+            printf '%s\n' "${apks[@]}"
+            exit 1
+          fi
+
+          mkdir -p dist
+          asset="dist/SMB-Library-v${VERSION_NAME}-release.apk"
+          cp "${apks[0]}" "$asset"
+          sha256sum "$asset" > "$asset.sha256"
+          echo "path=$asset" >> "$GITHUB_OUTPUT"
+
+      - id: commit
+        name: Commit version increment
+        if: steps.release-check.outputs.skip != 'true'
+        env:
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/all/smblibrary/build.gradle.kts
+          git commit -m "Release SMB Library v${VERSION_NAME} [skip ci]"
+          git push origin HEAD:main
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release notes
+        if: steps.release-check.outputs.skip != 'true'
+        env:
+          PUSH_SHA: ${{ github.sha }}
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+          VERSION_CODE: ${{ steps.version.outputs.code }}
+          RELEASE_SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          previous_tag="$(git tag --list 'smblibrary-v*' --sort=-version:refname | head -n 1)"
+          if [[ -n "$previous_tag" ]]; then
+            range="$previous_tag..$PUSH_SHA"
+          else
+            range="$PUSH_SHA"
+          fi
+
+          changes="$(git log "$range" --no-merges --max-count=20 --format='- %s (`%h`)' -- src/all/smblibrary)"
+          if [[ -z "$changes" ]]; then
+            changes="- Maintenance release."
+          fi
+
+          {
+            echo "## Changes"
+            echo
+            echo "$changes"
+            echo
+            echo "## Build"
+            echo
+            echo "- Version: \`$VERSION_NAME\` (version code \`$VERSION_CODE\`)"
+            echo "- Commit: \`$RELEASE_SHA\`"
+            echo "- APK: signed release build"
+          } > release-notes.md
+
+      - name: Publish GitHub Release
+        if: steps.release-check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+          RELEASE_SHA: ${{ steps.commit.outputs.sha }}
+          APK_PATH: ${{ steps.artifact.outputs.path }}
+        run: |
+          gh release create "$RELEASE_TAG" \
+            "$APK_PATH#SMB Library signed release APK" \
+            "$APK_PATH.sha256#SHA-256 checksum" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$RELEASE_SHA" \
+            --title "SMB Library v$VERSION_NAME" \
+            --notes-file release-notes.md \
+            --latest
+
+      - name: Remove signing key
+        if: always()
+        run: rm -f signingkey.jks
