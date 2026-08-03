@@ -92,6 +92,50 @@ class SmbRepository {
         }
     }
 
+    fun openRandomAccessFile(
+        config: eu.kanade.tachiyomi.extension.all.smblibrary.SmbConfig,
+        relativePath: String,
+    ): RemoteRandomAccessHandle {
+        requireConfigured(config)
+        val safeRelativePath = PathCodec.normalizeRelativePath(relativePath)
+        val client = newClient(config)
+        var connection: Connection? = null
+        var session: Session? = null
+        var share: DiskShare? = null
+        var file: File? = null
+        try {
+            connection = client.connect(config.host, config.port)
+            session = connection.authenticate(auth(config))
+            share = session.connectShare(config.share) as DiskShare
+            val path = remotePath(config, safeRelativePath)
+            file = share.openFile(
+                path,
+                EnumSet.of(AccessMask.GENERIC_READ),
+                null,
+                SMB2ShareAccess.ALL,
+                SMB2CreateDisposition.FILE_OPEN,
+                null,
+            )
+            val information = file.fileInformation
+            return RemoteRandomAccessHandle(
+                relativePath = safeRelativePath,
+                size = information.standardInformation.endOfFile,
+                lastModifiedMillis = information.basicInformation.lastWriteTime.toEpochMillis(),
+                file = file,
+                closeables = listOf(file, share, session, connection, client),
+            ).also {
+                file = null
+            }
+        } catch (e: Throwable) {
+            closeQuietly(file)
+            closeQuietly(share)
+            closeQuietly(session)
+            closeQuietly(connection)
+            closeQuietly(client)
+            throw translate(safeRelativePath, e)
+        }
+    }
+
     private fun <T> withShare(
         config: eu.kanade.tachiyomi.extension.all.smblibrary.SmbConfig,
         block: (DiskShare) -> T,
@@ -234,5 +278,35 @@ class RemoteFileHandle(
             } catch (_: Throwable) {
             }
         }
+    }
+}
+
+class RemoteRandomAccessHandle(
+    val relativePath: String,
+    override val size: Long,
+    val lastModifiedMillis: Long,
+    private val file: File,
+    private val closeables: List<AutoCloseable?>,
+) : RandomAccessData {
+    @Synchronized
+    override fun read(offset: Long, target: ByteArray, targetOffset: Int, length: Int): Int {
+        if (offset < 0L || targetOffset < 0 || length < 0 || length > target.size - targetOffset) {
+            throw IndexOutOfBoundsException()
+        }
+        if (offset >= size || length == 0) return -1
+        return file.read(target, offset, targetOffset, minOf(length, MAX_READ_SIZE))
+    }
+
+    override fun close() {
+        closeables.forEach {
+            try {
+                it?.close()
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
+    private companion object {
+        const val MAX_READ_SIZE = 1024 * 1024
     }
 }

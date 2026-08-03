@@ -3,18 +3,19 @@ package eu.kanade.tachiyomi.extension.all.smblibrary
 import com.hierynomus.protocol.transport.TransportException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.io.File
+import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.net.ConnectException
 import java.net.NoRouteToHostException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
-import java.nio.file.Files
+import java.util.Random
+import java.util.zip.CRC32
 import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 class SmbLibraryLogicTest {
     @Test
@@ -68,6 +69,27 @@ class SmbLibraryLogicTest {
     }
 
     @Test
+    fun pageCodecRoundTripsRemoteZipOffsets() {
+        val page = PageDescriptor(
+            type = PageType.ArchiveEntry,
+            mangaPath = "漫画 [作者]",
+            chapterPath = "漫画 [作者]/第1話.cbz",
+            pagePath = "images/001 %.png",
+            index = 0,
+            size = 1234,
+            lastModifiedMillis = 100,
+            archiveSize = 9999,
+            archiveLastModifiedMillis = 200,
+            archiveEntryOffset = 456,
+            archiveCompressedSize = 789,
+            archiveCompressionMethod = 8,
+            archiveFlags = 2048,
+        )
+
+        assertEquals(page, PathCodec.page(PathCodec.pageUrl(page)))
+    }
+
+    @Test
     fun pathCodecRejectsTraversal() {
         assertThrows(SmbLibraryException.UnsafePath::class.java) {
             PathCodec.mangaUrl("../secret")
@@ -85,17 +107,6 @@ class SmbLibraryLogicTest {
     @Test
     fun zipEntryFilterRejectsZipSlip() {
         assertFalse(ContentDetector.isReadableZipImage(ZipEntry("../001.jpg")))
-    }
-
-    @Test
-    fun cacheFingerprintChangesWhenRemoteFileChanges() {
-        val first = ArchiveFingerprint("nas-a", "A/chapter.cbz", 100, 1)
-        val second = ArchiveFingerprint("nas-a", "A/chapter.cbz", 101, 1)
-        val third = ArchiveFingerprint("nas-a", "A/chapter.cbz", 100, 2)
-        val fourth = ArchiveFingerprint("nas-b", "A/chapter.cbz", 100, 1)
-        assertNotEquals(first.cacheKey, second.cacheKey)
-        assertNotEquals(first.cacheKey, third.cacheKey)
-        assertNotEquals(first.cacheKey, fourth.cacheKey)
     }
 
     @Test
@@ -186,39 +197,44 @@ class SmbLibraryLogicTest {
     }
 
     @Test
-    fun archiveCleanupKeepsProtectedOversizedFile() {
-        val directory = Files.createTempDirectory("smb-library-cache-test").toFile()
-        try {
-            val protected = File(directory, "protected.zip").apply { writeBytes(ByteArray(20)) }
-            val old = File(directory, "old.zip").apply { writeBytes(ByteArray(8)) }
-            old.setLastModified(1)
-            protected.setLastModified(2)
+    fun zipDirectoryAndEntryUseRandomAccessRanges() {
+        val firstPage = ByteArray(512 * 1024).also { Random(7).nextBytes(it) }
+        val secondPage = "second page".toByteArray()
+        val archive = zipOf(
+            "10.png" to firstPage,
+            "2.png" to secondPage,
+            "notes.txt" to "ignored".toByteArray(),
+        )
+        val data = ByteArrayRandomAccessData(archive)
 
-            ArchiveCache(SmbRepository(), maxBytes = 10, archiveDirectory = directory).cleanup(protected)
+        val entries = ZipDirectoryParser.read(data, "chapter.cbz")
+            .filter { ContentDetector.isReadableZipImage(it.name, it.isDirectory) }
+        assertEquals(listOf("10.png", "2.png"), entries.map { it.name })
+        assertTrue(data.bytesRead < archive.size)
 
-            assertTrue(protected.exists())
-            assertFalse(old.exists())
-        } finally {
-            directory.deleteRecursively()
-        }
+        val second = entries.single { it.name == "2.png" }
+        data.bytesRead = 0
+        val decoded = ZipEntryStream.open(data, second, "chapter.cbz").use { it.readBytes() }
+        assertEquals(secondPage.toList(), decoded.toList())
+        assertTrue(data.bytesRead < firstPage.size / 10)
     }
 
     @Test
-    fun archiveDownloadValidatorRejectsChangedRemoteFile() {
-        val fingerprint = ArchiveFingerprint("nas", "M/chapter.cbz", 100, 10)
-        val changed = RemoteEntry("M/chapter.cbz", "chapter.cbz", false, 101, 11)
-
-        assertThrows(SmbLibraryException.ZipDownloadInterrupted::class.java) {
-            ArchiveDownloadValidator.validate(fingerprint, downloadedSize = 101, current = changed)
+    fun zipEntryStreamInflatesDeflatedUtf8Entry() {
+        val expected = "漫画ページ-日本語".repeat(200).toByteArray()
+        val archive = ByteArrayOutputStream().use { output ->
+            ZipOutputStream(output).use { zip ->
+                zip.putNextEntry(ZipEntry("第1話/001.png"))
+                zip.write(expected)
+                zip.closeEntry()
+            }
+            output.toByteArray()
         }
-    }
+        val data = ByteArrayRandomAccessData(archive)
+        val entry = ZipDirectoryParser.read(data, "chapter.cbz").single()
 
-    @Test
-    fun archiveDownloadValidatorAcceptsMatchingFingerprint() {
-        val fingerprint = ArchiveFingerprint("nas", "M/chapter.cbz", 100, 10)
-        val current = RemoteEntry("M/chapter.cbz", "chapter.cbz", false, 100, 10)
-
-        ArchiveDownloadValidator.validate(fingerprint, downloadedSize = 100, current = current)
+        assertEquals("第1話/001.png", entry.name)
+        assertEquals(expected.toList(), ZipEntryStream.open(data, entry, "chapter.cbz").use { it.readBytes() }.toList())
     }
 
     @Test
@@ -231,6 +247,42 @@ class SmbLibraryLogicTest {
         assertTrue(repository.translate("M", NoRouteToHostException()) is SmbLibraryException.TcpConnectionFailed)
         assertTrue(repository.translate("M", TransportException(UnknownHostException())) is SmbLibraryException.HostUnreachable)
         assertTrue(repository.translate("M", IOException()) is SmbLibraryException.ReadDisconnected)
+    }
+
+    private fun zipOf(vararg entries: Pair<String, ByteArray>): ByteArray = ByteArrayOutputStream().use { output ->
+        ZipOutputStream(output).use { zip ->
+            entries.forEach { (name, bytes) ->
+                val crc = CRC32().apply { update(bytes) }
+                zip.putNextEntry(
+                    ZipEntry(name).apply {
+                        method = ZipEntry.STORED
+                        size = bytes.size.toLong()
+                        compressedSize = bytes.size.toLong()
+                        this.crc = crc.value
+                    },
+                )
+                zip.write(bytes)
+                zip.closeEntry()
+            }
+        }
+        output.toByteArray()
+    }
+
+    private class ByteArrayRandomAccessData(
+        private val bytes: ByteArray,
+    ) : RandomAccessData {
+        override val size = bytes.size.toLong()
+        var bytesRead = 0
+
+        override fun read(offset: Long, target: ByteArray, targetOffset: Int, length: Int): Int {
+            if (offset >= bytes.size) return -1
+            val count = minOf(length, bytes.size - offset.toInt())
+            bytes.copyInto(target, targetOffset, offset.toInt(), offset.toInt() + count)
+            bytesRead += count
+            return count
+        }
+
+        override fun close() = Unit
     }
 
 }

@@ -19,9 +19,11 @@ object ContentDetector {
         else -> "application/octet-stream"
     }
 
-    fun isReadableZipImage(entry: ZipEntry): Boolean {
-        if (entry.isDirectory) return false
-        val name = entry.name.replace('\\', '/')
+    fun isReadableZipImage(entry: ZipEntry): Boolean = isReadableZipImage(entry.name, entry.isDirectory)
+
+    fun isReadableZipImage(path: String, isDirectory: Boolean): Boolean {
+        if (isDirectory) return false
+        val name = path.replace('\\', '/')
         if (!PathCodec.isSafeRelativePath(name)) return false
         val fileName = name.substringAfterLast('/')
         if (fileName == ".DS_Store") return false

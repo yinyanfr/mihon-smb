@@ -4,11 +4,11 @@ import android.content.SharedPreferences
 import android.os.Handler
 import android.os.Looper
 import android.text.InputType
+import android.util.Base64
 import android.widget.Toast
 import androidx.preference.EditTextPreference
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
-import eu.kanade.tachiyomi.extension.R
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.UnmeteredSource
@@ -17,81 +17,78 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.source.online.HttpSource
 import keiyoushi.annotation.Source
-import keiyoushi.source.KeiSource
-import keiyoushi.utils.applicationContext
 import keiyoushi.utils.getPreferencesLazy
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.JsonElement
 import okhttp3.Interceptor
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
+import rx.Observable
+import rx.schedulers.Schedulers
 
 @Source
 abstract class SmbLibrary :
-    KeiSource(),
+    HttpSource(),
     ConfigurableSource,
     UnmeteredSource {
     override val supportsLatest = false
 
-    override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addInterceptor(::interceptSmbImage)
+    override val client = network.client.newBuilder()
+        .addInterceptor(::interceptSmbImage)
+        .build()
 
     private val preferences: SharedPreferences by getPreferencesLazy()
     private val repository = SmbRepository()
-    private val archiveCache = ArchiveCache(repository)
+    private val remoteZipReader = RemoteZipReader(repository)
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val defaultCoverBytes by lazy {
-        applicationContext.resources.openRawResource(R.drawable.default_manga_cover).use { it.readBytes() }
-    }
     private val placeholderHtmlBytes by lazy { createPlaceholderHtml().toByteArray(Charsets.UTF_8) }
-
-    override suspend fun getPopularManga(page: Int): MangasPage = withContext(Dispatchers.IO) {
-        MangasPage(listMangaFolders(MangaSort.DEFAULT), hasNextPage = false)
+    private val placeholderDataUrl by lazy {
+        "data:text/html;base64," + Base64.encodeToString(placeholderHtmlBytes, Base64.NO_WRAP)
     }
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = withContext(Dispatchers.IO) {
+    override fun fetchPopularManga(page: Int): Observable<MangasPage> = Observable.fromCallable {
+        MangasPage(listMangaFolders(MangaSort.DEFAULT), hasNextPage = false)
+    }.subscribeOn(Schedulers.io())
+
+    override fun fetchSearchManga(page: Int, query: String, filters: FilterList): Observable<MangasPage> = Observable.fromCallable {
         val normalizedQuery = query.trim()
         val sort = filters.filterIsInstance<MangaSortFilter>().firstOrNull()?.selected ?: MangaSort.DEFAULT
         val mangas = listMangaFolders(sort)
             .filter { normalizedQuery.isEmpty() || it.title.contains(normalizedQuery, ignoreCase = true) }
         MangasPage(mangas, hasNextPage = false)
-    }
+    }.subscribeOn(Schedulers.io())
 
-    override fun getFilterList(data: JsonElement?): FilterList = FilterList(MangaSortFilter())
+    override fun getFilterList(): FilterList = FilterList(MangaSortFilter())
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = MangasPage(emptyList(), false)
+    override fun fetchLatestUpdates(page: Int): Observable<MangasPage> = Observable.just(MangasPage(emptyList(), false))
 
-    override suspend fun fetchMangaUpdate(
-        manga: SManga,
-        chapters: List<SChapter>,
-        fetchDetails: Boolean,
-        fetchChapters: Boolean,
-    ): SMangaUpdate = withContext(Dispatchers.IO) {
-        val updatedManga = if (fetchDetails) {
-            val path = PathCodec.mangaPath(manga.url)
-            manga.apply {
-                title = path.substringAfterLast('/')
-                description = "SMB relative path: $path"
-                status = SManga.UNKNOWN
-                thumbnail_url = DEFAULT_COVER_URL
-            }
-        } else {
-            manga
+    override fun fetchMangaDetails(manga: SManga): Observable<SManga> = Observable.fromCallable {
+        val path = PathCodec.mangaPath(manga.url)
+        manga.apply {
+            title = path.substringAfterLast('/')
+            description = "SMB relative path: $path"
+            status = SManga.UNKNOWN
+            initialized = true
+            thumbnail_url = DEFAULT_COVER_URI
         }
-        val updatedChapters = if (fetchChapters) chapterList(updatedManga) else chapters
-        SMangaUpdate(updatedManga, updatedChapters)
-    }
+    }.subscribeOn(Schedulers.io())
 
-    override suspend fun getPageList(chapter: SChapter): List<Page> = withContext(Dispatchers.IO) {
+    override fun fetchChapterList(manga: SManga): Observable<List<SChapter>> = Observable.fromCallable {
+        chapterList(manga)
+    }.subscribeOn(Schedulers.io())
+
+    override fun fetchPageList(chapter: SChapter): Observable<List<Page>> = Observable.fromCallable {
         pageList(chapter)
-    }
+    }.subscribeOn(Schedulers.io())
 
     override fun imageRequest(page: Page): Request = GET(page.imageUrl!!, headers)
+
+    override fun getMangaUrl(manga: SManga): String = placeholderDataUrl
+
+    override fun getChapterUrl(chapter: SChapter): String = placeholderDataUrl
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         screen.addPreference(textPreference(screen, PREF_HOST, "Host", "NAS hostname or IP address"))
@@ -132,11 +129,6 @@ abstract class SmbLibrary :
         }
 
         return when (request.url.encodedPath) {
-            "/cover" -> PageResponseFactory.fromBytes(
-                url = request.url.toString(),
-                mimeType = "image/png",
-                bytes = defaultCoverBytes,
-            )
             "/page" -> {
                 val descriptor = PathCodec.page(request.url.toString())
                 val config = currentConfig()
@@ -146,9 +138,7 @@ abstract class SmbLibrary :
                         PageResponseFactory.fromRemoteFile(request.url.toString(), descriptor, handle)
                     }
                     PageType.ArchiveEntry -> {
-                        val fingerprint = archiveFingerprint(config, descriptor)
-                        val file = archiveCache.getOrDownload(config, fingerprint)
-                        val handle = archiveCache.openEntry(file, descriptor.pagePath, descriptor.chapterPath)
+                        val handle = remoteZipReader.openEntry(config, descriptor)
                         PageResponseFactory.fromZipEntry(request.url.toString(), descriptor, handle)
                     }
                 }
@@ -173,7 +163,7 @@ abstract class SmbLibrary :
                 url = PathCodec.mangaUrl(entry.relativePath)
                 status = SManga.UNKNOWN
                 initialized = true
-                thumbnail_url = DEFAULT_COVER_URL
+                thumbnail_url = DEFAULT_COVER_URI
             }
         }
     }
@@ -265,15 +255,12 @@ abstract class SmbLibrary :
     }
 
     private fun archivePages(config: SmbConfig, chapter: ChapterDescriptor): List<Page> {
-        val archiveEntry = repository.metadata(config, chapter.chapterPath)
         val fingerprint = ArchiveFingerprint(
-            cacheNamespace = config.cacheNamespace,
-            relativePath = archiveEntry.relativePath,
-            size = archiveEntry.size,
-            lastModifiedMillis = archiveEntry.lastModifiedMillis,
+            relativePath = chapter.chapterPath,
+            size = chapter.size,
+            lastModifiedMillis = chapter.lastModifiedMillis,
         )
-        val archiveFile = archiveCache.getOrDownload(config, fingerprint)
-        return archiveCache.listImageEntries(archiveFile, chapter.chapterPath).mapIndexed { index, entry ->
+        return remoteZipReader.listImageEntries(config, fingerprint).mapIndexed { index, entry ->
             val descriptor = PageDescriptor(
                 type = PageType.ArchiveEntry,
                 mangaPath = chapter.mangaPath,
@@ -282,8 +269,12 @@ abstract class SmbLibrary :
                 index = index,
                 size = entry.size,
                 lastModifiedMillis = entry.lastModifiedMillis,
-                archiveSize = archiveEntry.size,
-                archiveLastModifiedMillis = archiveEntry.lastModifiedMillis,
+                archiveSize = chapter.size,
+                archiveLastModifiedMillis = chapter.lastModifiedMillis,
+                archiveEntryOffset = entry.localHeaderOffset,
+                archiveCompressedSize = entry.compressedSize,
+                archiveCompressionMethod = entry.compressionMethod,
+                archiveFlags = entry.flags,
             )
             Page(index, imageUrl = PathCodec.pageUrl(descriptor))
         }
@@ -339,25 +330,6 @@ abstract class SmbLibrary :
             preference.summary = if (password && (newValue as String).isNotEmpty()) "Configured" else summary
             true
         }
-    }
-
-    private fun archiveFingerprint(config: SmbConfig, descriptor: PageDescriptor): ArchiveFingerprint {
-        if (descriptor.archiveSize > 0L && descriptor.archiveLastModifiedMillis > 0L) {
-            return ArchiveFingerprint(
-                cacheNamespace = config.cacheNamespace,
-                relativePath = descriptor.chapterPath,
-                size = descriptor.archiveSize,
-                lastModifiedMillis = descriptor.archiveLastModifiedMillis,
-            )
-        }
-
-        val archiveEntry = repository.metadata(config, descriptor.chapterPath)
-        return ArchiveFingerprint(
-            cacheNamespace = config.cacheNamespace,
-            relativePath = archiveEntry.relativePath,
-            size = archiveEntry.size,
-            lastModifiedMillis = archiveEntry.lastModifiedMillis,
-        )
     }
 
     private fun createPlaceholderHtml(): String = """
@@ -416,9 +388,21 @@ abstract class SmbLibrary :
         else -> cause?.userMessage() ?: message ?: "SMB Library error"
     }
 
+    override fun popularMangaRequest(page: Int): Request = GET(baseUrl, headers)
+    override fun popularMangaParse(response: Response): MangasPage = throw UnsupportedOperationException()
+    override fun latestUpdatesRequest(page: Int): Request = GET(baseUrl, headers)
+    override fun latestUpdatesParse(response: Response): MangasPage = throw UnsupportedOperationException()
+    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request = GET(baseUrl, headers)
+    override fun searchMangaParse(response: Response): MangasPage = throw UnsupportedOperationException()
+    override fun mangaDetailsParse(response: Response): SManga = throw UnsupportedOperationException()
+    override fun chapterListParse(response: Response): List<SChapter> = throw UnsupportedOperationException()
+    override fun pageListParse(response: Response): List<Page> = throw UnsupportedOperationException()
+    override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException()
+
     companion object {
         private const val LOCAL_HOST = "smb.library.local"
-        private const val DEFAULT_COVER_URL = "https://$LOCAL_HOST/cover"
+        private const val DEFAULT_COVER_URI =
+            "android.resource://eu.kanade.tachiyomi.extension.all.smblibrary/drawable/default_manga_cover"
         private const val PREF_HOST = "smb_host"
         private const val PREF_PORT = "smb_port"
         private const val PREF_SHARE = "smb_share"

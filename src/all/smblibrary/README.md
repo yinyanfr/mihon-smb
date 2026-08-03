@@ -7,9 +7,9 @@ SMB Library is a Mihon/Tachiyomi-compatible source extension that reads manga di
 - `SmbLibrary.kt`: source entry point, preferences, Mihon model mapping.
 - `SmbRepository.kt`: SMB connection, directory enumeration, metadata and remote streams.
 - `ContentDetector.kt`: image/archive detection and ZIP entry filtering.
-- `ArchiveCache.kt`: private-cache ZIP/CBZ download, fingerprinting and cleanup.
+- `RemoteZipReader.kt`: ZIP central-directory parsing and per-page SMB range streams.
 - `PathCodec.kt`: reversible internal identifiers without credentials.
-- `PageResponseFactory.kt`: OkHttp responses backed by SMB or cached archive streams.
+- `PageResponseFactory.kt`: OkHttp responses backed by SMB streams.
 
 ## Supported Formats
 
@@ -38,10 +38,9 @@ Every manga uses the same bundled SMB Library placeholder cover. Browsing perfor
 JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew src:all:smblibrary:assembleDebug
 ```
 
-## Cache Strategy
+## Remote ZIP Streaming
 
-ZIP/CBZ archives are cached in the extension private cache directory under `smb-library/archives`.
-The cache key includes the remote relative path, size and last-modified time. Downloads use a temporary file, verify the remote fingerprint again, and then atomically rename the result. A simple LRU cleanup targets 512 MiB while preserving the archive currently being opened; one archive larger than the limit is allowed to remain readable.
+ZIP/CBZ archives are not copied into the Android cache. The extension reads the central directory by SMB offset, encodes each image entry's local-header offset and compressed size into its internal page descriptor, and reads only that page range when requested. Stored and Deflate entries are decompressed as streams. Remote size and modification time changes invalidate previously listed pages.
 
 ## SMB Settings
 
@@ -62,4 +61,6 @@ Internal IDs encode only relative paths and fingerprints. Decoded paths reject a
 
 ## Future Work
 
-PDF, EPUB and RAR/CBR support should be added behind `ContentDetector` and page-provider style helpers, with archive/cache behavior kept in `ArchiveCache`.
+PDF, EPUB and RAR/CBR support should be added behind `ContentDetector` and page-provider style helpers. ZIP range behavior remains isolated in `RemoteZipReader`.
+
+The extension uses library version `1.4` to retain compatibility with Tachiyomi forks that do not support the `1.6` source API.

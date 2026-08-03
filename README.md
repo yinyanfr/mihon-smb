@@ -19,7 +19,7 @@ The extension lives in [`src/all/smblibrary`](src/all/smblibrary).
 - Lists every direct child folder under the configured root as a manga.
 - Detects direct image folders, `.zip` files, `.cbz` files, and images stored directly in a manga folder as chapters.
 - Reads folder images as SMB streams without loading a complete chapter into memory.
-- Downloads ZIP/CBZ archives to the extension's private cache for random-access reading.
+- Reads ZIP/CBZ central directories and individual compressed page ranges directly over SMB.
 - Uses a bundled SMB Library illustration as the default cover without scanning manga folders or archives.
 - Supports natural sorting and manga sorting by name or SMB modification time in either direction. The default is newest first.
 - Keeps SMB credentials in Android preferences and never places them in manga, chapter, or page URLs.
@@ -66,11 +66,11 @@ For a remote path such as `//nas/shared/dl`:
 
 The root path is relative to the selected share and may be empty. Do not include `smb://` in the host field. Empty username and password values can be used with NAS shares that explicitly allow anonymous access.
 
-## Archive Cache
+## Remote ZIP Streaming
 
-ZIP/CBZ files are cached under the extension's private Android cache directory. Cache keys include the SMB namespace, relative path, file size, and modification time. Downloads use temporary files, verify the remote fingerprint, and are renamed only after completion.
+ZIP/CBZ files are not downloaded in full. SMB Library reads the ZIP central directory using SMB random-access offsets, then fetches only the compressed byte range for the page being displayed and decompresses it as a stream.
 
-The cache targets a 512 MiB LRU limit. The archive currently being opened is protected from cleanup, and one archive larger than the limit is allowed to remain readable.
+The remote file size and modification time are checked before page reads. If the archive changes after the chapter list was loaded, the extension asks the user to refresh instead of reading stale offsets. Standard Stored and Deflate ZIP entries are supported; encrypted and multi-disk archives are rejected.
 
 ## Build
 
@@ -109,12 +109,15 @@ src/all/smblibrary/tools/create-smb-test-data.sh
 - Credentials are not encoded into Mihon URLs or written to project logs.
 - Internal paths are relative, reversible, and checked for traversal.
 - ZIP entries are filtered without extracting archives into arbitrary directories.
+- ZIP page ranges are bounds-checked before SMB reads.
 - The extension is read-only and does not modify NAS content.
 - Local signing keys, signing environment files, SDK paths, Gradle caches, APKs, and build outputs are ignored by Git.
 
 ## Current Limitations
 
 Per-manga covers, RAR/CBR, PDF, EPUB, 7z, nested archives, online metadata scraping, arbitrary-depth browsing, NAS discovery, SMB1, and NAS write operations are not supported.
+
+The extension intentionally remains on extension library `1.4` for compatibility with Mihon and Tachiyomi forks that have not adopted the `1.6` source API.
 
 ## Upstream And License
 

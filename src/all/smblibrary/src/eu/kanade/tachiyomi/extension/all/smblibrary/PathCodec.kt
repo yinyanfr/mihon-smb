@@ -2,8 +2,6 @@ package eu.kanade.tachiyomi.extension.all.smblibrary
 
 import java.net.URLDecoder
 import java.net.URLEncoder
-import java.security.MessageDigest
-import java.util.Locale
 
 object PathCodec {
     private const val BASE = "https://smb.library.local"
@@ -53,7 +51,11 @@ object PathCodec {
         "&size=${descriptor.size}" +
         "&mtime=${descriptor.lastModifiedMillis}" +
         "&archiveSize=${descriptor.archiveSize}" +
-        "&archiveMtime=${descriptor.archiveLastModifiedMillis}"
+        "&archiveMtime=${descriptor.archiveLastModifiedMillis}" +
+        "&entryOffset=${descriptor.archiveEntryOffset}" +
+        "&compressedSize=${descriptor.archiveCompressedSize}" +
+        "&method=${descriptor.archiveCompressionMethod}" +
+        "&flags=${descriptor.archiveFlags}"
 
     fun mangaPath(url: String): String = normalizeRelativePath(params(url).getValue("path"))
 
@@ -83,12 +85,11 @@ object PathCodec {
             lastModifiedMillis = params.getValue("mtime").toLong(),
             archiveSize = params["archiveSize"]?.toLongOrNull() ?: 0L,
             archiveLastModifiedMillis = params["archiveMtime"]?.toLongOrNull() ?: 0L,
+            archiveEntryOffset = params["entryOffset"]?.toLongOrNull() ?: 0L,
+            archiveCompressedSize = params["compressedSize"]?.toLongOrNull() ?: 0L,
+            archiveCompressionMethod = params["method"]?.toIntOrNull() ?: -1,
+            archiveFlags = params["flags"]?.toIntOrNull() ?: 0,
         )
-    }
-
-    fun stableHash(value: String): String {
-        val digest = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))
-        return digest.joinToString("") { "%02x".format(Locale.ROOT, it) }
     }
 
     private fun params(url: String): Map<String, String> {
