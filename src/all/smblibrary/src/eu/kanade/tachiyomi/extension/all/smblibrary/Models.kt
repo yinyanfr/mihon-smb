@@ -12,6 +12,9 @@ data class SmbConfig(
 ) {
     val isUsable: Boolean
         get() = host.isNotBlank() && port in 1..65535 && share.isNotBlank()
+
+    val cacheNamespace: String
+        get() = PathCodec.stableHash("${host.lowercase()}:$port|$share|$rootPath")
 }
 
 data class RemoteEntry(
@@ -62,17 +65,17 @@ data class PageDescriptor(
     val lastModifiedMillis: Long,
     val archiveSize: Long = 0L,
     val archiveLastModifiedMillis: Long = 0L,
-    val archiveEntryOffset: Long = 0L,
-    val archiveCompressedSize: Long = 0L,
-    val archiveCompressionMethod: Int = -1,
-    val archiveFlags: Int = 0,
 )
 
 data class ArchiveFingerprint(
+    val cacheNamespace: String,
     val relativePath: String,
     val size: Long,
     val lastModifiedMillis: Long,
-)
+) {
+    val cacheKey: String
+        get() = PathCodec.stableHash("$cacheNamespace|$relativePath|$size|$lastModifiedMillis")
+}
 
 sealed class SmbLibraryException(message: String, cause: Throwable? = null) : Exception(message, cause) {
     class NotConfigured : SmbLibraryException("SMB is not configured. Fill in Host, Port and Share in extension settings.")
@@ -84,10 +87,11 @@ sealed class SmbLibraryException(message: String, cause: Throwable? = null) : Ex
     class AccessDenied(path: String, cause: Throwable) : SmbLibraryException("No permission to access SMB path: $path", cause)
     class Timeout(cause: Throwable) : SmbLibraryException("SMB operation timed out.", cause)
     class FileRemoved(path: String, cause: Throwable? = null) : SmbLibraryException("File was removed after listing: $path", cause)
-    class ZipChanged(path: String) : SmbLibraryException("ZIP/CBZ changed after listing. Refresh chapters and try again: $path")
+    class ZipDownloadInterrupted(path: String, cause: Throwable) : SmbLibraryException("ZIP/CBZ download was interrupted: $path", cause)
     class ZipBroken(path: String, cause: Throwable) : SmbLibraryException("ZIP/CBZ is broken or unreadable: $path", cause)
     class ZipEncrypted(path: String, cause: Throwable) : SmbLibraryException("Encrypted ZIP/CBZ archives are not supported: $path", cause)
     class UnsupportedImage(path: String) : SmbLibraryException("Unsupported image format: $path")
     class ReadDisconnected(path: String, cause: Throwable) : SmbLibraryException("SMB connection was interrupted while reading: $path", cause)
+    class CacheFull(cause: Throwable) : SmbLibraryException("Not enough local cache space for ZIP/CBZ archive.", cause)
     class UnsafePath(path: String) : SmbLibraryException("Unsafe path rejected: $path")
 }

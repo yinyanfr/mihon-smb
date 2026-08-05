@@ -7,9 +7,9 @@ SMB Library is a Mihon/Tachiyomi-compatible source extension that reads manga di
 - `SmbLibrary.kt`: source entry point, preferences, Mihon model mapping.
 - `SmbRepository.kt`: SMB connection, directory enumeration, metadata and remote streams.
 - `ContentDetector.kt`: image/archive detection and ZIP entry filtering.
-- `RemoteZipReader.kt`: ZIP central-directory parsing and per-page SMB range streams.
+- `ArchiveCache.kt`: sequential ZIP/CBZ download, fingerprint validation, local reading and LRU cleanup.
 - `PathCodec.kt`: reversible internal identifiers without credentials.
-- `PageResponseFactory.kt`: OkHttp responses backed by SMB streams.
+- `PageResponseFactory.kt`: OkHttp responses backed by SMB or local ZIP streams.
 
 ## Supported Formats
 
@@ -38,9 +38,11 @@ Every manga uses the same bundled SMB Library placeholder cover. Browsing perfor
 JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew src:all:smblibrary:assembleDebug
 ```
 
-## Remote ZIP Streaming
+## ZIP/CBZ Cache
 
-ZIP/CBZ archives are not copied into the Android cache. The extension reads the central directory by SMB offset, encodes each image entry's local-header offset and compressed size into its internal page descriptor, and reads only that page range when requested. Stored and Deflate entries are decompressed as streams. Remote size and modification time changes invalidate previously listed pages.
+The first open downloads the complete ZIP/CBZ to the app's private cache using one sequential SMB stream. Page enumeration waits for that transfer, so the reader never stops after a few pages to perform another SMB random read. Unchanged archives are reused by a fingerprint of SMB location, relative path, size, and modification time.
+
+Downloads use temporary files, storage sync, atomic replacement, and one striped lock per archive key. LRU cleanup defaults to 2048 MiB and can be set from 128 to 32768 MiB with `Archive cache size (MiB)`. Archives larger than the configured limit remain usable; older cache entries are removed first.
 
 ## SMB Settings
 
@@ -52,6 +54,7 @@ ZIP/CBZ archives are not copied into the Android cache. The extension reads the 
 - Password
 - Domain, optional
 - Connection timeout
+- Archive cache size in MiB, default `2048`
 
 Credentials are read only from Android preferences. Passwords are password-input fields and are never logged or encoded into manga/chapter/page URLs.
 
@@ -61,6 +64,6 @@ Internal IDs encode only relative paths and fingerprints. Decoded paths reject a
 
 ## Future Work
 
-PDF, EPUB and RAR/CBR support should be added behind `ContentDetector` and page-provider style helpers. ZIP range behavior remains isolated in `RemoteZipReader`.
+PDF, EPUB and RAR/CBR support should be added behind `ContentDetector` and page-provider style helpers. ZIP cache behavior remains isolated in `ArchiveCache`.
 
 The extension uses library version `1.4` to retain compatibility with Tachiyomi forks that do not support the `1.6` source API.

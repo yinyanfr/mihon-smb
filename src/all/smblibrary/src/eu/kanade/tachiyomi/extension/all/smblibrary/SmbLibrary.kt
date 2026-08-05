@@ -42,7 +42,7 @@ abstract class SmbLibrary :
 
     private val preferences: SharedPreferences by getPreferencesLazy()
     private val repository = SmbRepository()
-    private val remoteZipReader = RemoteZipReader(repository)
+    private val archiveCache = ArchiveCache(repository, ::archiveCacheMaxBytes)
     private val mainHandler = Handler(Looper.getMainLooper())
     private val placeholderHtmlBytes by lazy { createPlaceholderHtml().toByteArray(Charsets.UTF_8) }
     private val placeholderDataUrl by lazy {
@@ -92,13 +92,23 @@ abstract class SmbLibrary :
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         screen.addPreference(textPreference(screen, PREF_HOST, "Host", "NAS hostname or IP address"))
-        screen.addPreference(textPreference(screen, PREF_PORT, "Port", "445", number = true))
+        screen.addPreference(textPreference(screen, PREF_PORT, "Port", "445", defaultValue = "445", number = true))
         screen.addPreference(textPreference(screen, PREF_SHARE, "Share", "SMB share name"))
         screen.addPreference(textPreference(screen, PREF_ROOT, "Root path", "Path inside the share, can be empty"))
         screen.addPreference(textPreference(screen, PREF_USERNAME, "Username", "Can be empty for anonymous shares"))
         screen.addPreference(textPreference(screen, PREF_PASSWORD, "Password", "Not shown", password = true))
         screen.addPreference(textPreference(screen, PREF_DOMAIN, "Domain", "Optional domain or workgroup"))
-        screen.addPreference(textPreference(screen, PREF_TIMEOUT, "Connection timeout (ms)", "10000", number = true))
+        screen.addPreference(textPreference(screen, PREF_TIMEOUT, "Connection timeout (ms)", "10000", defaultValue = "10000", number = true))
+        screen.addPreference(
+            textPreference(
+                screen,
+                PREF_ARCHIVE_CACHE_MIB,
+                "Archive cache size (MiB)",
+                "Local ZIP/CBZ cache; default 2048 MiB",
+                defaultValue = "2048",
+                number = true,
+            ),
+        )
         screen.addPreference(
             SwitchPreferenceCompat(screen.context).apply {
                 title = "Test connection"
@@ -138,7 +148,9 @@ abstract class SmbLibrary :
                         PageResponseFactory.fromRemoteFile(request.url.toString(), descriptor, handle)
                     }
                     PageType.ArchiveEntry -> {
-                        val handle = remoteZipReader.openEntry(config, descriptor)
+                        val fingerprint = archiveFingerprint(config, descriptor)
+                        val file = archiveCache.getOrDownload(config, fingerprint)
+                        val handle = archiveCache.openEntry(file, descriptor.pagePath, descriptor.chapterPath)
                         PageResponseFactory.fromZipEntry(request.url.toString(), descriptor, handle)
                     }
                 }
@@ -256,11 +268,13 @@ abstract class SmbLibrary :
 
     private fun archivePages(config: SmbConfig, chapter: ChapterDescriptor): List<Page> {
         val fingerprint = ArchiveFingerprint(
+            cacheNamespace = config.cacheNamespace,
             relativePath = chapter.chapterPath,
             size = chapter.size,
             lastModifiedMillis = chapter.lastModifiedMillis,
         )
-        return remoteZipReader.listImageEntries(config, fingerprint).mapIndexed { index, entry ->
+        val archiveFile = archiveCache.getOrDownload(config, fingerprint)
+        return archiveCache.listImageEntries(archiveFile, chapter.chapterPath).mapIndexed { index, entry ->
             val descriptor = PageDescriptor(
                 type = PageType.ArchiveEntry,
                 mangaPath = chapter.mangaPath,
@@ -271,10 +285,6 @@ abstract class SmbLibrary :
                 lastModifiedMillis = entry.lastModifiedMillis,
                 archiveSize = chapter.size,
                 archiveLastModifiedMillis = chapter.lastModifiedMillis,
-                archiveEntryOffset = entry.localHeaderOffset,
-                archiveCompressedSize = entry.compressedSize,
-                archiveCompressionMethod = entry.compressionMethod,
-                archiveFlags = entry.flags,
             )
             Page(index, imageUrl = PathCodec.pageUrl(descriptor))
         }
@@ -292,11 +302,38 @@ abstract class SmbLibrary :
             ?.coerceIn(1000L, 120000L) ?: 10000L,
     )
 
+    private fun archiveCacheMaxBytes(): Long = preferences.getString(PREF_ARCHIVE_CACHE_MIB, "2048")
+        .orEmpty()
+        .toLongOrNull()
+        ?.coerceIn(MIN_ARCHIVE_CACHE_MIB, MAX_ARCHIVE_CACHE_MIB)
+        ?.times(1024L * 1024L)
+        ?: DEFAULT_ARCHIVE_CACHE_BYTES
+
+    private fun archiveFingerprint(config: SmbConfig, descriptor: PageDescriptor): ArchiveFingerprint {
+        if (descriptor.archiveSize > 0L && descriptor.archiveLastModifiedMillis > 0L) {
+            return ArchiveFingerprint(
+                cacheNamespace = config.cacheNamespace,
+                relativePath = descriptor.chapterPath,
+                size = descriptor.archiveSize,
+                lastModifiedMillis = descriptor.archiveLastModifiedMillis,
+            )
+        }
+
+        val archive = repository.metadata(config, descriptor.chapterPath)
+        return ArchiveFingerprint(
+            cacheNamespace = config.cacheNamespace,
+            relativePath = archive.relativePath,
+            size = archive.size,
+            lastModifiedMillis = archive.lastModifiedMillis,
+        )
+    }
+
     private fun textPreference(
         screen: PreferenceScreen,
         key: String,
         title: String,
         summary: String,
+        defaultValue: String = "",
         password: Boolean = false,
         number: Boolean = false,
     ): EditTextPreference = EditTextPreference(screen.context).apply {
@@ -308,15 +345,7 @@ abstract class SmbLibrary :
             summary
         }
         dialogTitle = title
-        setDefaultValue(
-            if (key == PREF_PORT) {
-                "445"
-            } else if (key == PREF_TIMEOUT) {
-                "10000"
-            } else {
-                ""
-            },
-        )
+        setDefaultValue(defaultValue)
         if (password || number) {
             setOnBindEditTextListener {
                 it.inputType = when {
@@ -411,5 +440,9 @@ abstract class SmbLibrary :
         private const val PREF_PASSWORD = "smb_password"
         private const val PREF_DOMAIN = "smb_domain"
         private const val PREF_TIMEOUT = "smb_timeout"
+        private const val PREF_ARCHIVE_CACHE_MIB = "smb_archive_cache_mib"
+        private const val MIN_ARCHIVE_CACHE_MIB = 128L
+        private const val MAX_ARCHIVE_CACHE_MIB = 32768L
+        private const val DEFAULT_ARCHIVE_CACHE_BYTES = 2L * 1024L * 1024L * 1024L
     }
 }
