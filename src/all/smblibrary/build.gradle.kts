@@ -6,7 +6,7 @@ plugins {
 
 keiyoushi {
     name = "SMB Library"
-    versionCode = 8
+    versionCode = 9
     contentWarning = ContentWarning.SAFE
     libVersion = "1.4"
 
