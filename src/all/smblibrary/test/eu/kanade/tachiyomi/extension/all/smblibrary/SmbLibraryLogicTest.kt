@@ -9,6 +9,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
 import java.io.IOException
+import java.net.URI
 import java.net.ConnectException
 import java.net.NoRouteToHostException
 import java.net.SocketTimeoutException
@@ -17,6 +18,15 @@ import java.nio.file.Files
 import java.util.zip.ZipEntry
 
 class SmbLibraryLogicTest {
+    @Test
+    fun bundledCoverUsesTheSourcesInterceptedHttpOrigin() {
+        val uri = URI(BundledCover.URL)
+
+        assertEquals("https", uri.scheme)
+        assertEquals(BundledCover.HOST, uri.host)
+        assertEquals(BundledCover.PATH, uri.path)
+    }
+
     @Test
     fun naturalSortOrdersNumbers() {
         assertEquals(

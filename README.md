@@ -58,7 +58,7 @@ Every direct child folder remains visible even when it contains no supported cha
 
 Loose `.zip`, `.cbz`, and `.pdf` files directly inside the configured root create one virtual manga named `others`. Its modification time is the newest modification time among those loose files, so it participates correctly in newest-first sorting. ZIP/CBZ files become readable chapters; PDF files currently contribute to grouping and modification time but are not shown as chapters because PDF rendering is not implemented.
 
-The placeholder is exposed from the installed extension through a read-only Android `content://` provider. This lets Mihon and compatible Tachiyomi forks load the image through `ContentResolver` without network access or cross-package resource lookup. The URI path is versioned so updated artwork can invalidate image-loader caches.
+The placeholder uses a versioned pseudo-HTTPS URL handled by the extension's own OkHttp interceptor. Mihon and compatible Tachiyomi forks therefore load it through the normal source image path, while the interceptor returns the PNG bundled in the APK without network or NAS access. Changing the URL version invalidates stale image-loader caches.
 
 ## SMB Settings
 
@@ -121,7 +121,7 @@ src/all/smblibrary/tools/create-smb-test-data.sh
 - Internal paths are relative, reversible, and checked for traversal.
 - ZIP entries are filtered without extracting archives into arbitrary directories.
 - ZIP entries are validated and read from app-private cache without extracting paths to local storage.
-- The exported cover provider accepts one fixed read-only URI and cannot access SMB credentials, archive cache files, or arbitrary resources.
+- The placeholder URL is intercepted locally and cannot access SMB credentials, archive cache files, or arbitrary resources.
 - The extension is read-only and does not modify NAS content.
 - Local signing keys, signing environment files, SDK paths, Gradle caches, APKs, and build outputs are ignored by Git.
 

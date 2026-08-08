@@ -77,7 +77,7 @@ abstract class SmbLibrary :
             }
             status = SManga.UNKNOWN
             initialized = true
-            thumbnail_url = CoverProvider.COVER_URI
+            thumbnail_url = BundledCover.URL
         }
     }.subscribeOn(Schedulers.io())
 
@@ -139,11 +139,16 @@ abstract class SmbLibrary :
 
     private fun interceptSmbImage(chain: Interceptor.Chain): Response {
         val request = chain.request()
-        if (request.url.host != LOCAL_HOST) {
+        if (request.url.host != BundledCover.HOST) {
             return chain.proceed(request)
         }
 
         return when (request.url.encodedPath) {
+            BundledCover.PATH -> PageResponseFactory.fromBytes(
+                url = request.url.toString(),
+                mimeType = "image/png",
+                bytes = BundledCover.bytes,
+            )
             "/page" -> {
                 val descriptor = PathCodec.page(request.url.toString())
                 val config = currentConfig()
@@ -188,7 +193,7 @@ abstract class SmbLibrary :
                 }
                 status = SManga.UNKNOWN
                 initialized = true
-                thumbnail_url = CoverProvider.COVER_URI
+                thumbnail_url = BundledCover.URL
             }
         }
     }
@@ -446,7 +451,6 @@ abstract class SmbLibrary :
     override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException()
 
     companion object {
-        private const val LOCAL_HOST = "smb.library.local"
         private const val PREF_HOST = "smb_host"
         private const val PREF_PORT = "smb_port"
         private const val PREF_SHARE = "smb_share"

@@ -8,7 +8,7 @@ SMB Library is a Mihon/Tachiyomi-compatible source extension that reads manga di
 - `SmbRepository.kt`: SMB connection, directory enumeration, metadata and remote streams.
 - `ContentDetector.kt`: image/archive detection and ZIP entry filtering.
 - `ArchiveCache.kt`: sequential ZIP/CBZ download, fingerprint validation, local reading and LRU cleanup.
-- `CoverProvider.kt`: read-only Android content provider for the bundled placeholder image.
+- `BundledCover.kt`: bundled placeholder image exposed through the source's intercepted HTTP client.
 - `PathCodec.kt`: reversible internal identifiers without credentials.
 - `PageResponseFactory.kt`: OkHttp responses backed by SMB or local ZIP streams.
 
@@ -33,7 +33,7 @@ RAR/CBR, PDF, EPUB, 7z, nested archives, metadata scraping and cover generation 
 
 ## Covers
 
-Every manga uses the same bundled SMB Library placeholder cover. A fixed, versioned `content://` URI serves the PNG through Android's `ContentResolver`, avoiding network access and unsupported cross-package `android.resource://` lookups. Browsing performs only the root directory listing and does not open child folders, images, or archives to derive thumbnails.
+Every manga uses the same bundled SMB Library placeholder cover. A fixed, versioned pseudo-HTTPS URL is handled by the source's own OkHttp interceptor, which returns the PNG bundled in the extension APK without network or NAS access. Browsing performs only the root directory listing and does not open child folders, images, or archives to derive thumbnails.
 
 ## Build
 
@@ -63,7 +63,7 @@ Credentials are read only from Android preferences. Passwords are password-input
 
 ## Security Notes
 
-Internal IDs encode only relative paths and fingerprints. Decoded paths reject absolute paths, empty path elements and `..` traversal. The exported cover provider serves only one bundled PNG and rejects writes and unknown paths. The extension does not write to the NAS.
+Internal IDs encode only relative paths and fingerprints. Decoded paths reject absolute paths, empty path elements and `..` traversal. The placeholder route serves only the bundled PNG through the source's private OkHttp interceptor. The extension does not write to the NAS.
 
 ## Future Work
 
