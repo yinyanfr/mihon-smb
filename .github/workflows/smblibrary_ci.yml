@@ -1,0 +1,64 @@
+name: SMB Library CI
+
+on:
+  pull_request:
+    paths:
+      - 'src/all/smblibrary/**'
+      - 'common/**'
+      - 'compiler/**'
+      - 'core/**'
+      - 'gradle/**'
+      - 'lib/**'
+      - 'utils/**'
+      - 'build.gradle.kts'
+      - 'gradle.properties'
+      - 'gradlew'
+      - 'gradlew.bat'
+      - 'settings.gradle.kts'
+      - '.github/workflows/smblibrary_ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smblibrary-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Test and build SMB Library
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Java
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
+        with:
+          java-version: 17
+          distribution: temurin
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
+
+      - name: Test and build debug APK
+        run: |
+          chmod +x ./gradlew
+          ./gradlew \
+            :src:all:smblibrary:testDebugUnitTest \
+            :src:all:smblibrary:spotlessCheck \
+            :src:all:smblibrary:assembleDebug \
+            --stacktrace
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: smb-library-debug-apk
+          path: src/all/smblibrary/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 7

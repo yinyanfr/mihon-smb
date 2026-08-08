@@ -66,13 +66,18 @@ abstract class SmbLibrary :
     override fun fetchLatestUpdates(page: Int): Observable<MangasPage> = Observable.just(MangasPage(emptyList(), false))
 
     override fun fetchMangaDetails(manga: SManga): Observable<SManga> = Observable.fromCallable {
-        val path = PathCodec.mangaPath(manga.url)
         manga.apply {
-            title = path.substringAfterLast('/')
-            description = "SMB relative path: $path"
+            if (PathCodec.isRootFilesManga(url)) {
+                title = RootFilesManga.TITLE
+                description = "Files stored directly in the SMB root. PDF reading is not supported yet."
+            } else {
+                val path = PathCodec.mangaPath(url)
+                title = path.substringAfterLast('/')
+                description = "SMB relative path: $path"
+            }
             status = SManga.UNKNOWN
             initialized = true
-            thumbnail_url = DEFAULT_COVER_URI
+            thumbnail_url = CoverProvider.COVER_URI
         }
     }.subscribeOn(Schedulers.io())
 
@@ -165,68 +170,80 @@ abstract class SmbLibrary :
 
     private fun listMangaFolders(sort: MangaSort): List<SManga> {
         val config = currentConfig()
+        val rootEntries = repository.list(config, "")
+        val entries = buildList {
+            addAll(rootEntries.filter { it.isDirectory })
+            RootFilesManga.listingEntry(rootEntries)?.let(::add)
+        }
         return MangaListingSorter.sorted(
-            repository.list(config, "")
-                .filter { it.isDirectory },
+            entries,
             sort,
         ).map { entry ->
             SManga.create().apply {
                 title = entry.name
-                url = PathCodec.mangaUrl(entry.relativePath)
+                url = if (entry.isDirectory) {
+                    PathCodec.mangaUrl(entry.relativePath)
+                } else {
+                    PathCodec.rootFilesMangaUrl()
+                }
                 status = SManga.UNKNOWN
                 initialized = true
-                thumbnail_url = DEFAULT_COVER_URI
+                thumbnail_url = CoverProvider.COVER_URI
             }
         }
     }
 
     private fun chapterList(manga: SManga): List<SChapter> {
         val config = currentConfig()
-        val mangaPath = PathCodec.mangaPath(manga.url)
-        val chapters = repository.browse(config) {
-            val entries = list(mangaPath)
-            buildList {
-                val rootImages = entries.filter { !it.isDirectory && ContentDetector.isSupportedImage(it.name) }
-                if (rootImages.isNotEmpty()) {
-                    add(
-                        ChapterDescriptor(
-                            mangaPath = mangaPath,
-                            type = ChapterType.RootImages,
-                            chapterPath = "",
-                            name = "本卷",
-                            size = rootImages.sumOf { it.size.coerceAtLeast(0L) },
-                            lastModifiedMillis = rootImages.maxOf { it.lastModifiedMillis },
-                        ),
-                    )
-                }
-
-                entries.filter { it.isDirectory }.forEach { folder ->
-                    val childEntries = list(folder.relativePath)
-                    if (childEntries.any { !it.isDirectory && ContentDetector.isSupportedImage(it.name) }) {
+        val chapters = if (PathCodec.isRootFilesManga(manga.url)) {
+            RootFilesManga.archiveChapters(repository.list(config, ""))
+        } else {
+            val mangaPath = PathCodec.mangaPath(manga.url)
+            repository.browse(config) {
+                val entries = list(mangaPath)
+                buildList {
+                    val rootImages = entries.filter { !it.isDirectory && ContentDetector.isSupportedImage(it.name) }
+                    if (rootImages.isNotEmpty()) {
                         add(
                             ChapterDescriptor(
                                 mangaPath = mangaPath,
-                                type = ChapterType.ImageDirectory,
-                                chapterPath = folder.relativePath,
-                                name = folder.name,
-                                size = folder.size,
-                                lastModifiedMillis = folder.lastModifiedMillis,
+                                type = ChapterType.RootImages,
+                                chapterPath = "",
+                                name = "本卷",
+                                size = rootImages.sumOf { it.size.coerceAtLeast(0L) },
+                                lastModifiedMillis = rootImages.maxOf { it.lastModifiedMillis },
                             ),
                         )
                     }
-                }
 
-                entries.filter { !it.isDirectory && ContentDetector.isArchive(it.name) }.forEach { archive ->
-                    add(
-                        ChapterDescriptor(
-                            mangaPath = mangaPath,
-                            type = ChapterType.Archive,
-                            chapterPath = archive.relativePath,
-                            name = archive.name,
-                            size = archive.size,
-                            lastModifiedMillis = archive.lastModifiedMillis,
-                        ),
-                    )
+                    entries.filter { it.isDirectory }.forEach { folder ->
+                        val childEntries = list(folder.relativePath)
+                        if (childEntries.any { !it.isDirectory && ContentDetector.isSupportedImage(it.name) }) {
+                            add(
+                                ChapterDescriptor(
+                                    mangaPath = mangaPath,
+                                    type = ChapterType.ImageDirectory,
+                                    chapterPath = folder.relativePath,
+                                    name = folder.name,
+                                    size = folder.size,
+                                    lastModifiedMillis = folder.lastModifiedMillis,
+                                ),
+                            )
+                        }
+                    }
+
+                    entries.filter { !it.isDirectory && ContentDetector.isArchive(it.name) }.forEach { archive ->
+                        add(
+                            ChapterDescriptor(
+                                mangaPath = mangaPath,
+                                type = ChapterType.Archive,
+                                chapterPath = archive.relativePath,
+                                name = archive.name,
+                                size = archive.size,
+                                lastModifiedMillis = archive.lastModifiedMillis,
+                            ),
+                        )
+                    }
                 }
             }
         }
@@ -430,8 +447,6 @@ abstract class SmbLibrary :
 
     companion object {
         private const val LOCAL_HOST = "smb.library.local"
-        private const val DEFAULT_COVER_URI =
-            "android.resource://eu.kanade.tachiyomi.extension.all.smblibrary/drawable/default_manga_cover"
         private const val PREF_HOST = "smb_host"
         private const val PREF_PORT = "smb_port"
         private const val PREF_SHARE = "smb_share"

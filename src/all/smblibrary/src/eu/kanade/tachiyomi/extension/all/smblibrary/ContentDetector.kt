@@ -11,6 +11,8 @@ object ContentDetector {
 
     fun isArchive(path: String): Boolean = extension(path) in archiveExtensions
 
+    fun isRootMangaFile(path: String): Boolean = isArchive(path) || extension(path) == "pdf"
+
     fun mimeType(path: String): String = when (extension(path)) {
         "jpg", "jpeg" -> "image/jpeg"
         "png" -> "image/png"

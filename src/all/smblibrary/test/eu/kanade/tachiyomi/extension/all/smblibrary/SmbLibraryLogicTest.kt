@@ -48,6 +48,15 @@ class SmbLibraryLogicTest {
     }
 
     @Test
+    fun rootMangaFileDetectionIncludesPdfWithoutMakingItAnArchive() {
+        assertTrue(ContentDetector.isRootMangaFile("standalone.CBZ"))
+        assertTrue(ContentDetector.isRootMangaFile("standalone.ZIP"))
+        assertTrue(ContentDetector.isRootMangaFile("standalone.PDF"))
+        assertFalse(ContentDetector.isArchive("standalone.PDF"))
+        assertFalse(ContentDetector.isRootMangaFile("notes.txt"))
+    }
+
+    @Test
     fun pathCodecRoundTripsSpecialCharacters() {
         val original = "Special Characters 漫画 [作者] #1/第01話 100% 😀"
         val url = PathCodec.mangaUrl(original)
@@ -65,6 +74,14 @@ class SmbLibraryLogicTest {
             lastModifiedMillis = 20,
         )
         assertEquals(chapter, PathCodec.chapter(PathCodec.chapterUrl(chapter)))
+    }
+
+    @Test
+    fun rootFilesMangaUsesASeparateStableUrl() {
+        val url = PathCodec.rootFilesMangaUrl()
+
+        assertTrue(PathCodec.isRootFilesManga(url))
+        assertFalse(PathCodec.isRootFilesManga(PathCodec.mangaUrl("others")))
     }
 
     @Test
@@ -114,6 +131,38 @@ class SmbLibraryLogicTest {
         assertNotEquals(first.cacheKey, second.cacheKey)
         assertNotEquals(first.cacheKey, third.cacheKey)
         assertNotEquals(first.cacheKey, fourth.cacheKey)
+    }
+
+    @Test
+    fun looseRootFilesBecomeOthersUsingNewestModificationTime() {
+        val entries = listOf(
+            RemoteEntry("Manga", "Manga", true, 0, 500),
+            RemoteEntry("old.cbz", "old.cbz", false, 100, 100),
+            RemoteEntry("new.PDF", "new.PDF", false, 200, 300),
+            RemoteEntry("middle.zip", "middle.zip", false, 150, 200),
+            RemoteEntry("notes.txt", "notes.txt", false, 999, 900),
+        )
+
+        val others = RootFilesManga.listingEntry(entries)!!
+
+        assertEquals("others", others.name)
+        assertEquals(450L, others.size)
+        assertEquals(300L, others.lastModifiedMillis)
+        assertFalse(others.isDirectory)
+    }
+
+    @Test
+    fun othersListsOnlyReadableArchivesAsChapters() {
+        val entries = listOf(
+            RemoteEntry("chapter 10.cbz", "chapter 10.cbz", false, 100, 10),
+            RemoteEntry("reference.pdf", "reference.pdf", false, 200, 20),
+            RemoteEntry("chapter 2.ZIP", "chapter 2.ZIP", false, 300, 30),
+        )
+
+        val chapters = RootFilesManga.archiveChapters(entries)
+
+        assertEquals(listOf("chapter 10.cbz", "chapter 2.ZIP"), chapters.map { it.name })
+        assertTrue(chapters.all { it.mangaPath == RootFilesManga.INTERNAL_PATH })
     }
 
     @Test

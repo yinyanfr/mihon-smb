@@ -37,6 +37,10 @@ object PathCodec {
 
     fun mangaUrl(relativePath: String): String = "$BASE/manga?path=${enc(normalizeRelativePath(relativePath))}"
 
+    fun rootFilesMangaUrl(): String = "$BASE/manga?type=root-files"
+
+    fun isRootFilesManga(url: String): Boolean = params(url)["type"] == "root-files"
+
     fun chapterUrl(descriptor: ChapterDescriptor): String = "$BASE/chapter" +
         "?manga=${enc(descriptor.mangaPath)}" +
         "&type=${enc(descriptor.type.id)}" +

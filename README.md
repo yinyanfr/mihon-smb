@@ -17,6 +17,7 @@ The extension lives in [`src/all/smblibrary`](src/all/smblibrary).
 
 - Connects to SMB2/SMB3 shares with host, port, share, root path, username, password, and optional domain settings.
 - Lists every direct child folder under the configured root as a manga.
+- Groups loose root-level `.zip`, `.cbz`, and `.pdf` files into one virtual manga named `others`.
 - Detects direct image folders, `.zip` files, `.cbz` files, and images stored directly in a manga folder as chapters.
 - Reads folder images as SMB streams without loading a complete chapter into memory.
 - Downloads ZIP/CBZ archives once with a sequential SMB stream, then reads every page from local cache.
@@ -34,6 +35,8 @@ Each direct folder under the configured root appears as one manga:
 
 ```text
 Manga Root/
+├── Loose Chapter.cbz
+├── Loose Reference.pdf
 ├── Manga With Direct Images/
 │   ├── 1.jpg
 │   ├── 2.jpg
@@ -52,6 +55,10 @@ Manga Root/
 
 Images directly inside a manga folder are grouped into one virtual chapter named `本卷`. Unsupported files are ignored.
 Every direct child folder remains visible even when it contains no supported chapters. All entries use the same bundled placeholder cover, so browsing the library does not trigger additional SMB requests.
+
+Loose `.zip`, `.cbz`, and `.pdf` files directly inside the configured root create one virtual manga named `others`. Its modification time is the newest modification time among those loose files, so it participates correctly in newest-first sorting. ZIP/CBZ files become readable chapters; PDF files currently contribute to grouping and modification time but are not shown as chapters because PDF rendering is not implemented.
+
+The placeholder is exposed from the installed extension through a read-only Android `content://` provider. This lets Mihon and compatible Tachiyomi forks load the image through `ContentResolver` without network access or cross-package resource lookup. The URI path is versioned so updated artwork can invalidate image-loader caches.
 
 ## SMB Settings
 
@@ -92,7 +99,11 @@ src/all/smblibrary/build/outputs/apk/debug/
 
 ## Automated Releases
 
-Every push to `main` runs [Release SMB Library](.github/workflows/smblibrary_release.yml). The workflow increments the extension version code, runs unit tests and formatting checks, builds a signed release APK, commits the version increment, and publishes a GitHub Release with a SHA-256 checksum and recent SMB Library changes.
+This repository publishes only SMB Library. The inherited all-extension matrix builds and upstream repository publishing workflows are disabled.
+
+Pull requests that affect SMB Library or its build infrastructure run [SMB Library CI](.github/workflows/smblibrary_ci.yml). It runs module unit tests and formatting checks, builds only the SMB Library debug APK, and uploads that APK as a short-lived workflow artifact.
+
+Relevant pushes to `main` run [Release SMB Library](.github/workflows/smblibrary_release.yml). The workflow increments the SMB Library version code, runs module unit tests and formatting checks, builds only the signed SMB Library release APK, commits the version increment, and publishes a GitHub Release with a SHA-256 checksum and recent SMB Library changes.
 
 Release signing uses the `SIGNING_KEY`, `ALIAS`, `KEY_STORE_PASSWORD`, and `KEY_PASSWORD` GitHub Actions secrets. Signing material is never stored in Git.
 
@@ -110,6 +121,7 @@ src/all/smblibrary/tools/create-smb-test-data.sh
 - Internal paths are relative, reversible, and checked for traversal.
 - ZIP entries are filtered without extracting archives into arbitrary directories.
 - ZIP entries are validated and read from app-private cache without extracting paths to local storage.
+- The exported cover provider accepts one fixed read-only URI and cannot access SMB credentials, archive cache files, or arbitrary resources.
 - The extension is read-only and does not modify NAS content.
 - Local signing keys, signing environment files, SDK paths, Gradle caches, APKs, and build outputs are ignored by Git.
 
